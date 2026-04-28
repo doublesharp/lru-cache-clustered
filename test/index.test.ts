@@ -171,6 +171,33 @@ void test('dispatch rejects when handler throws', async () => {
   await assert.rejects(cache.get('k'), /synthetic failure/);
 });
 
+void test('dispatch wraps non-Error rejections in Error', async () => {
+  caches.clear();
+  const cache = new LRUCacheForClustersAsPromised<string, string>({
+    namespace: 'nonerr',
+    max: 10,
+  });
+  const inner = caches.get('nonerr');
+  assert.ok(inner);
+  // Throw a string (not an Error) to hit the `new Error(String(e))` branch.
+  (inner as { get: (k: unknown) => unknown }).get = () => {
+    // eslint-disable-next-line @typescript-eslint/only-throw-error
+    throw 'plain-string-throw';
+  };
+  await assert.rejects(cache.get('k'), (err: unknown) => {
+    assert.ok(err instanceof Error);
+    assert.match(err.message, /plain-string-throw/);
+    return true;
+  });
+});
+
+void test('decr accepts ttl option', async () => {
+  caches.clear();
+  const cache = new LRUCacheForClustersAsPromised<string, number>({ namespace: 'decr-ttl', max: 10 });
+  const v = await cache.decr('counter', 2, { ttl: 60_000 });
+  assert.equal(v, -2);
+});
+
 void test('ready resolves to undefined in primary mode', async () => {
   caches.clear();
   const cache = new LRUCacheForClustersAsPromised<string, string>({ namespace: 'ready-1' });

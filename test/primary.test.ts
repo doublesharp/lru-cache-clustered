@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { getOrCreateCache, caches, handleRequest, stats } from '../src/primary.ts';
-import { SOURCE, type Request, type Stats } from '../src/messages.ts';
+import { SOURCE, deserializeError, serializeError, type Request, type Stats } from '../src/messages.ts';
 
 void test('getOrCreateCache creates a cache for a new namespace', () => {
   caches.clear();
@@ -442,4 +442,80 @@ void test('handleRequest incr/decr count as sets in stats', () => {
   d('decr', { key: 'c' });
   const s = (d('stats') as { value: unknown }).value as Stats;
   assert.equal(s.sets, 3);
+});
+
+void test('handleRequest rejects non-object input with empty id and structured error', () => {
+  const r1 = handleRequest('not an object' as unknown as Request);
+  assert.equal(r1.ok, false);
+  assert.equal(r1.id, '');
+  assert.match((r1 as { error: { message: string } }).error.message, /not an object/);
+
+  const r2 = handleRequest(null as unknown as Request);
+  assert.equal(r2.ok, false);
+  assert.equal(r2.id, '');
+});
+
+void test('getStats recreates the stats record if it has been removed', () => {
+  caches.clear();
+  stats.clear();
+  // Init creates both the cache and its stats record.
+  handleRequest({ id: 'i', namespace: 'gs', source: SOURCE, op: 'init', options: { max: 5 } });
+  // Externally remove the stats record while the cache stays around.
+  stats.delete('gs');
+  // A subsequent op (set) calls getStats, which should recreate the record.
+  const r = handleRequest({ id: 's', namespace: 'gs', source: SOURCE, op: 'set', key: 'k', value: 'v' });
+  assert.equal(r.ok, true);
+  const recreated = stats.get('gs');
+  assert.ok(recreated);
+  assert.equal(recreated.namespace, 'gs');
+  assert.equal(recreated.sets, 1);
+});
+
+void test('serializeError captures Error code and chained cause', () => {
+  const inner = new Error('inner-msg');
+  (inner as { code?: string }).code = 'E_INNER';
+  const outer = new Error('outer-msg');
+  (outer as { code?: string }).code = 'E_OUTER';
+  (outer as { cause?: unknown }).cause = inner;
+  const s = serializeError(outer);
+  assert.equal(s.name, 'Error');
+  assert.equal(s.message, 'outer-msg');
+  assert.equal(s.code, 'E_OUTER');
+  assert.ok(s.cause);
+  assert.equal(s.cause.message, 'inner-msg');
+  assert.equal(s.cause.code, 'E_INNER');
+});
+
+void test('serializeError accepts numeric code', () => {
+  const e = new Error('numeric');
+  (e as { code?: number }).code = 42;
+  assert.equal(serializeError(e).code, 42);
+});
+
+void test('serializeError handles Error without stack', () => {
+  const e = new Error('no-stack');
+  (e as { stack?: undefined }).stack = undefined;
+  const s = serializeError(e);
+  assert.equal(s.message, 'no-stack');
+  assert.equal(s.stack, undefined);
+});
+
+void test('serializeError wraps non-Error throws', () => {
+  assert.deepEqual(serializeError('plain string'), { name: 'Error', message: 'plain string' });
+  assert.deepEqual(serializeError(42), { name: 'Error', message: '42' });
+  assert.deepEqual(serializeError({ foo: 1 }), { name: 'Error', message: '[object Object]' });
+});
+
+void test('deserializeError round-trips through serialize', () => {
+  const original = new Error('round-trip');
+  original.name = 'CustomErr';
+  (original as { code?: string }).code = 'E_RT';
+  (original as { cause?: unknown }).cause = new Error('the-cause');
+  const reconstructed = deserializeError(serializeError(original));
+  assert.equal(reconstructed.name, 'CustomErr');
+  assert.equal(reconstructed.message, 'round-trip');
+  assert.equal((reconstructed as { code?: unknown }).code, 'E_RT');
+  const cause = (reconstructed as { cause?: Error }).cause;
+  assert.ok(cause instanceof Error);
+  assert.equal(cause.message, 'the-cause');
 });

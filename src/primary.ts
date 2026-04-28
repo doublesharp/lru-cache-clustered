@@ -26,9 +26,6 @@ const messagesDebug = Debug(`${DEBUG_PREFIX}-messages`);
 type NonNullish = {};
 type AnyCache = LRUCache<NonNullish, NonNullish>;
 
-export const caches: Map<string, AnyCache> = new Map();
-export const stats: Map<string, Stats> = new Map();
-
 type DispatchContext = {
   workerId?: number;
 };
@@ -38,9 +35,29 @@ type FetchLock = {
   ownerWorkerId?: number;
 };
 
-let clusterListenerInstalled = false;
-let nextFetchToken = 0;
-const fetchLocks: Map<string, Map<NonNullish, FetchLock>> = new Map();
+type PrimaryState = {
+  caches: Map<string, AnyCache>;
+  stats: Map<string, Stats>;
+  fetchLocks: Map<string, Map<NonNullish, FetchLock>>;
+  clusterListenerInstalled: boolean;
+  nextFetchToken: number;
+};
+
+// The scoped and legacy package names can coexist during the migration window.
+// Share primary-side state process-wide so both names use one IPC listener and
+// one namespace registry when they are installed together.
+const STATE_KEY = Symbol.for('lru-cache-clustered.primary');
+const primaryState = ((globalThis as Record<PropertyKey, unknown>)[STATE_KEY] ??= {
+  caches: new Map<string, AnyCache>(),
+  stats: new Map<string, Stats>(),
+  fetchLocks: new Map<string, Map<NonNullish, FetchLock>>(),
+  clusterListenerInstalled: false,
+  nextFetchToken: 0,
+}) as PrimaryState;
+
+export const caches = primaryState.caches;
+export const stats = primaryState.stats;
+const fetchLocks = primaryState.fetchLocks;
 
 function freshStats(namespace: string): Stats {
   return { namespace, hits: 0, misses: 0, sets: 0, deletes: 0, evictions: 0, size: 0 };
@@ -362,7 +379,7 @@ export function dispatchOp(namespace: string, payload: ExecPayload, context: Dis
         if (value !== undefined) return { kind: 'value', value };
         if (locks.has(key)) return { kind: 'follower' };
       }
-      const token = `fetch-${++nextFetchToken}`;
+      const token = `fetch-${++primaryState.nextFetchToken}`;
       locks.set(key, { token, ownerWorkerId: context.workerId });
       return { kind: 'leader', token };
     }
@@ -452,8 +469,8 @@ function err(request: unknown, cause: unknown): Response {
 
 // Caller must check `cluster.isPrimary` — this only runs on the primary.
 export function installClusterListener(): void {
-  if (clusterListenerInstalled) return;
-  clusterListenerInstalled = true;
+  if (primaryState.clusterListenerInstalled) return;
+  primaryState.clusterListenerInstalled = true;
 
   cluster.on('exit', (worker: Worker) => {
     releaseFetchLocksForWorker(worker.id);

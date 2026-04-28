@@ -3,6 +3,26 @@ import assert from 'node:assert/strict';
 import { getOrCreateCache, caches, handleRequest, stats } from '../src/primary.ts';
 import { SOURCE, deserializeError, serializeError, type Request, type Stats } from '../src/messages.ts';
 
+type PrimaryModule = typeof import('../src/primary.ts');
+
+void test('separately loaded package copies share primary process state', async () => {
+  const firstUrl = new URL('../src/primary.ts', import.meta.url);
+  firstUrl.search = 'copy=first';
+  const secondUrl = new URL('../src/primary.ts', import.meta.url);
+  secondUrl.search = 'copy=second';
+
+  const first = (await import(firstUrl.href)) as PrimaryModule;
+  const second = (await import(secondUrl.href)) as PrimaryModule;
+
+  first.caches.clear();
+  first.stats.clear();
+  const cache = first.getOrCreateCache('dual-package', { max: 2 });
+
+  assert.equal(second.caches, first.caches);
+  assert.equal(second.stats, first.stats);
+  assert.equal(second.caches.get('dual-package'), cache);
+});
+
 void test('getOrCreateCache creates a cache for a new namespace', () => {
   caches.clear();
   const cache = getOrCreateCache('alpha', { max: 5 });

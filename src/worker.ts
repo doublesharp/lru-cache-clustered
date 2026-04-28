@@ -22,7 +22,7 @@ type ProcessLike = {
 
 // Distributive Omit so each member of the Request discriminated union keeps its own shape.
 type DistributiveOmit<T, K extends keyof never> = T extends unknown ? Omit<T, K> : never;
-export type RequestPayload = DistributiveOmit<Request, 'id' | 'namespace' | 'source'>;
+type RequestPayload = DistributiveOmit<Request, 'id' | 'namespace' | 'source'>;
 
 export interface IpcClient {
   sendToPrimary: <T = unknown>(opts: SendOptions, payload: RequestPayload) => Promise<T>;

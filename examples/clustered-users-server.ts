@@ -65,6 +65,8 @@ function startPrimary(): void {
 }
 
 async function startWorker(): Promise<void> {
+  // getInstance() makes worker startup fail fast if the primary cannot create
+  // or validate the shared namespace for this cache.
   const cache = await LRUCacheClustered.getInstance<string, UserRecord>({
     namespace: 'example-users',
     max: 1_000,
@@ -84,6 +86,8 @@ async function startWorker(): Promise<void> {
     return record;
   };
 
+  // memoize() uses the cache's cluster-wide fetch dedup, so concurrent misses
+  // for the same user collapse to one loader across all workers.
   const getUser = memoize(cache, loadUser, (id: string) => `user:${id}`, { ttl: CACHE_TTL_MS });
 
   const server = createServer((req, res) => {
@@ -144,7 +148,9 @@ async function startWorker(): Promise<void> {
         const refresh = url.searchParams.get('refresh') === '1';
         const key = `user:${id}`;
         const user = refresh
-          ? await cache.fetch(key, () => loadUser(id), { ttl: CACHE_TTL_MS, forceRefresh: true })
+          ? // forceRefresh starts a new leader fetch even if another value is
+            // already cached for this key.
+            await cache.fetch(key, () => loadUser(id), { ttl: CACHE_TTL_MS, forceRefresh: true })
           : await getUser(id);
 
         writeJson(res, 200, {

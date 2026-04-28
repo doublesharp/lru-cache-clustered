@@ -71,6 +71,8 @@ function startPrimary(): void {
 }
 
 async function startWorker(): Promise<void> {
+  // Every worker points at the same primary-owned namespace, so per-client
+  // counters are shared cluster-wide instead of split per process.
   const cache = await LRUCacheClustered.getInstance<string, number>({
     namespace: 'example-rate-limit',
     max: 10_000,
@@ -127,6 +129,8 @@ async function startWorker(): Promise<void> {
           return;
         }
 
+        // incr() is atomic on the primary. Passing ttl here only affects the
+        // first write for this key, which matches fixed-window rate limiting.
         const count = await cache.incr(key, 1, { ttl: WINDOW_MS });
         const resetInMs = await cache.getRemainingTTL(key);
         const allowed = count <= LIMIT;

@@ -5,6 +5,9 @@ These examples are meant to be run from this repository:
 ```sh
 pnpm example:users
 pnpm example:rate-limit
+pnpm example:sessions
+pnpm example:idempotency
+pnpm example:documents
 ```
 
 They import `../src/index.ts` so you can exercise the current workspace without building first. If you copy either example into another app, switch that import to `lru-cache-for-clusters-as-promised`.
@@ -44,6 +47,56 @@ What to look for:
 
 - The request counter keeps increasing even when different workers serve the requests.
 - Once a client key is created, later `incr()` calls do not extend the original TTL window.
+
+## `clustered-session-server.ts`
+
+Small shared session store that demonstrates `set()`, `get()`, `delete()`, and TTL inspection.
+
+```sh
+pnpm example:sessions
+curl 'http://127.0.0.1:3002/login?sid=s1&user=ada'
+curl 'http://127.0.0.1:3002/session?sid=s1'
+curl 'http://127.0.0.1:3002/touch?sid=s1&cart=3'
+curl 'http://127.0.0.1:3002/ttl?sid=s1'
+curl 'http://127.0.0.1:3002/logout?sid=s1'
+```
+
+What to look for:
+
+- `session.updatedByPid` shows which worker last wrote the session.
+- `servedBy.pid` can differ from that writer, showing a different worker read the same session state.
+
+## `clustered-idempotency-server.ts`
+
+Small webhook or job-intake example that demonstrates `setIfAbsent()` for cluster-wide duplicate suppression.
+
+```sh
+pnpm example:idempotency
+curl 'http://127.0.0.1:3003/submit?key=checkout-123'
+curl 'http://127.0.0.1:3003/status?key=checkout-123'
+curl 'http://127.0.0.1:3003/reset?key=checkout-123'
+```
+
+What to look for:
+
+- Only the first request for a key wins the claim.
+- Concurrent duplicates return the existing in-flight or completed record instead of reprocessing.
+
+## `clustered-compressed-documents-server.ts`
+
+Small document cache that demonstrates `wrap()` with gzip compression for larger JSON payloads.
+
+```sh
+pnpm example:documents
+curl 'http://127.0.0.1:3004/store?id=doc-1&kb=32'
+curl 'http://127.0.0.1:3004/document?id=doc-1'
+curl 'http://127.0.0.1:3004/delete?id=doc-1'
+```
+
+What to look for:
+
+- Responses include both `jsonBytes` and `storedBytes`.
+- The compressed size stays in the primary while callers read and write decoded JSON values.
 
 ## Environment variables
 

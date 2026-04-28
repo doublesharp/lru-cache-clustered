@@ -55,6 +55,16 @@ if (cluster.isPrimary) {
 
 > **Startup ordering.** Import this package in the primary before `cluster.fork()`. The primary-side IPC listener is installed at module import time; if workers send cache requests before that import happens, they will time out. Call `LRUCacheClustered.bootstrap()` if you want that setup to be explicit in application code.
 
+## Examples
+
+Runnable clustered server examples live in [`examples/README.md`](./examples/README.md):
+
+- shared read-through user cache via `memoize()` / `fetch()`
+- fixed-window rate limiting via atomic `incr()`
+- shared session storage via `set()` / `get()` / `delete()`
+- idempotent job intake via `setIfAbsent()`
+- compressed document caching via `wrap()`
+
 ## How it works
 
 <p align="center">

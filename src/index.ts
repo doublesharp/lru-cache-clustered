@@ -240,5 +240,6 @@ export class LRUCacheForClustersAsPromised<K = string, V = unknown> {
 }
 
 export { memoize, type MemoizeOptions } from './memoize.js';
+export { wrap, type Codec, type WrappedCache } from './codec.js';
 
 export default LRUCacheForClustersAsPromised;

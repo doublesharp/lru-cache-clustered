@@ -110,9 +110,34 @@ All `LRUCache` constructor options from [`lru-cache@11`](https://github.com/isaa
 | `allowStale(value?)`                          | `Promise<boolean>`                | Getter and setter.                                                                                                         |
 | `ready`                                       | `Promise<void>`                   | Resolves once worker init has reached the primary. Useful before the very first op.                                        |
 
+## `wrap` — codec / compression helper
+
+Wraps a cache with an `encode`/`decode` codec so values are transparently transformed on the way in and out. Useful for compression (gzip/brotli), serialization (MessagePack), or any other symmetric transform. The codec choice stays with the caller — the library doesn't bundle a compression algorithm.
+
+```ts
+import { gzipSync, gunzipSync } from 'node:zlib';
+import { LRUCacheForClustersAsPromised, wrap } from 'lru-cache-for-clusters-as-promised';
+
+const inner = new LRUCacheForClustersAsPromised<string, Buffer>({ namespace: 'big-blobs', max: 1000 });
+
+const cache = wrap(inner, {
+  encode: (v: unknown) => gzipSync(Buffer.from(JSON.stringify(v), 'utf8')),
+  decode: (raw: Buffer) => JSON.parse(gunzipSync(raw).toString('utf8')),
+});
+
+await cache.set('user:42', { id: 42, name: 'ada' });
+const u = await cache.get('user:42'); // decoded back to the original object
+```
+
+Both `encode` and `decode` may be sync or async. The wrapped surface covers the value-touching methods (`get`, `set`, `setIfAbsent`, `peek`, `mGet`, `mSet`, `values`, `entries`, `[Symbol.asyncIterator]`, `fetch`) plus the lifecycle/metric pass-throughs (`has`, `delete`, `keys`, `size`, `clear`, `purgeStale`, `getRemainingTTL`, `stats`).
+
+`incr`/`decr` and `dump`/`load` are **not** in the wrapped surface — they speak in numbers or the raw stored form. Reach them via `wrapped.cache` if you need them.
+
 ## `memoize` helper
 
-Wraps a function as cache-aside in one line. Concurrent invocations for the same key dedup to a single underlying call (within the same worker).
+Wraps a function as cache-aside in one line.
+
+> **Per-worker dedup.** Concurrent invocations for the same key in the _same_ worker share a single in-flight `fetcher` call. Workers do not share the in-flight slot, so two workers racing on the same missing key may both invoke `fetcher`. The cache itself stays consistent (last-write-wins on the primary), but the underlying call may run more than once across the cluster. The same caveat applies to `cache.fetch(...)`. If at-most-once invocation is required, your `fetcher` needs its own coordination (e.g. a primary-side lock).
 
 ```ts
 import { LRUCacheForClustersAsPromised, memoize } from 'lru-cache-for-clusters-as-promised';
@@ -129,6 +154,28 @@ const getUser = memoize(
 await getUser('42'); // first call: hits DB
 await getUser('42'); // second call: cached
 ```
+
+## `wrap` codec — transparent encode/decode
+
+`wrap(cache, codec)` returns a typed view of a cache where values pass through an encode/decode pair on the way in and out. Useful for compression, MessagePack, or any custom serialization. Both directions may be sync or async.
+
+```ts
+import { gzipSync, gunzipSync } from 'node:zlib';
+import { LRUCacheForClustersAsPromised, wrap, type Codec } from 'lru-cache-for-clusters-as-promised';
+
+const gzipJson: Codec<unknown, Buffer> = {
+  encode: (v) => gzipSync(Buffer.from(JSON.stringify(v))),
+  decode: (b) => JSON.parse(b.toString('utf8')),
+};
+
+const inner = new LRUCacheForClustersAsPromised<string, Buffer>({ namespace: 'compressed', max: 1000 });
+const cache = wrap(inner, gzipJson);
+
+await cache.set('user:42', { id: 42, name: 'ada' });
+const u = await cache.get('user:42'); // round-tripped through gzip+JSON
+```
+
+The wrapped surface includes `get/set/setIfAbsent/has/peek/delete/getRemainingTTL`, the multi-ops, enumeration, `clear/purgeStale/stats`, `fetch`, and `[Symbol.asyncIterator]`. Operations that don't make sense through a codec are deliberately omitted: `incr`/`decr` (numeric, would not survive most codecs) and `dump`/`load` (speak the raw stored form). Reach those via `wrapped.cache`.
 
 ## Migrating from v1.x
 

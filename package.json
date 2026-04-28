@@ -26,6 +26,7 @@
   "scripts": {
     "build": "tsup && tsc -p tsconfig.build.json",
     "test": "node --import tsx --test test/*.test.ts",
+    "test:fuzz": "node --import tsx --test test/*.fuzz.test.ts",
     "test:coverage": "c8 --reporter=text --reporter=lcov --include='src/**/*.ts' pnpm test",
     "lint": "eslint --no-error-on-unmatched-pattern src test",
     "format": "prettier --write src test",

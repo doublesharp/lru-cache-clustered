@@ -53,18 +53,11 @@ if (cluster.isPrimary) {
 
 ## How it works
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│  primary process                                            │
-│    caches: Map<namespace, LRUCache>                         │
-└──────────▲──────────────────▲──────────────────▲────────────┘
-           │ IPC              │ IPC              │ IPC
-       ┌───┴────┐         ┌───┴────┐         ┌───┴────┐
-       │worker 1│         │worker 2│   ···   │worker N│
-       └────────┘         └────────┘         └────────┘
-```
+<p align="center">
+  <img src="https://raw.githubusercontent.com/doublesharp/lru-cache-for-clusters-as-promised/main/assets/topology.svg" alt="One LRU cache shared across cluster workers via IPC. The primary process holds a Map of namespaced LRUCache instances; each worker sends typed IPC requests to the primary for every cache operation. In primary mode the dispatcher is invoked directly with no IPC." width="100%">
+</p>
 
-`new LRUCacheForClustersAsPromised(...)` branches at construction:
+`new ClusterCache(...)` branches at construction:
 
 - **In the primary** (`cluster.isPrimary === true`), the instance owns and directly operates on the in-process `LRUCache` for its namespace — no IPC, no allocation per call.
 - **In a worker**, every operation becomes a typed IPC request to the primary; the returned Promise resolves with the response.

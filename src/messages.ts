@@ -1,7 +1,7 @@
 export const SOURCE = 'lru-cache-for-clusters-as-promised' as const;
-export type Source = typeof SOURCE;
+type Source = typeof SOURCE;
 
-export type RequestBase = {
+type RequestBase = {
   id: string;
   namespace: string;
   source: Source;
@@ -12,9 +12,11 @@ export type Request = RequestBase &
     | { op: 'init'; options: SerializableLruOptions }
     | { op: 'get'; key: unknown }
     | { op: 'set'; key: unknown; value: unknown; ttl?: number }
+    | { op: 'setIfAbsent'; key: unknown; value: unknown; ttl?: number }
     | { op: 'delete'; key: unknown }
     | { op: 'has'; key: unknown }
     | { op: 'peek'; key: unknown }
+    | { op: 'getRemainingTTL'; key: unknown }
     | { op: 'clear' }
     | { op: 'purgeStale' }
     | { op: 'mGet'; keys: unknown[] }
@@ -24,17 +26,31 @@ export type Request = RequestBase &
     | { op: 'values' }
     | { op: 'entries' }
     | { op: 'dump' }
+    | { op: 'load'; entries: Array<[unknown, unknown]> }
     | { op: 'size' }
-    | { op: 'incr'; key: unknown; amount?: number }
-    | { op: 'decr'; key: unknown; amount?: number }
+    | { op: 'stats' }
+    | { op: 'incr'; key: unknown; amount?: number; ttl?: number }
+    | { op: 'decr'; key: unknown; amount?: number; ttl?: number }
     | { op: 'allowStale'; value?: boolean }
     | { op: 'max'; value?: number }
     | { op: 'ttl'; value?: number }
   );
 
+// Errors flow over IPC as a structured payload so consumers can branch on
+// `name`/`code`/`cause` instead of regex-matching a `message` string. Internal
+// to the wire format — workers receive a reconstructed `Error` via
+// `deserializeError`, never this raw shape.
+type SerializedError = {
+  name: string;
+  message: string;
+  code?: string | number;
+  stack?: string;
+  cause?: SerializedError;
+};
+
 export type Response = { id: string; source: Source } & (
   | { ok: true; value: unknown }
-  | { ok: false; error: string }
+  | { ok: false; error: SerializedError }
 );
 
 // Subset of LRUCache.Options that survives IPC structured-clone — no functions.
@@ -48,4 +64,34 @@ export type SerializableLruOptions = {
   ttlAutopurge?: boolean;
 };
 
-export type Op = Request['op'];
+export type Stats = {
+  namespace: string;
+  hits: number;
+  misses: number;
+  sets: number;
+  deletes: number;
+  evictions: number;
+  size: number;
+};
+
+export function serializeError(err: unknown): SerializedError {
+  if (err instanceof Error) {
+    const out: SerializedError = { name: err.name, message: err.message };
+    if (err.stack) out.stack = err.stack;
+    const code = (err as { code?: unknown }).code;
+    if (typeof code === 'string' || typeof code === 'number') out.code = code;
+    const cause = (err as { cause?: unknown }).cause;
+    if (cause !== undefined) out.cause = serializeError(cause);
+    return out;
+  }
+  return { name: 'Error', message: typeof err === 'string' ? err : String(err) };
+}
+
+export function deserializeError(payload: SerializedError): Error {
+  const err = new Error(payload.message);
+  err.name = payload.name;
+  if (payload.stack) err.stack = payload.stack;
+  if (payload.code !== undefined) (err as { code?: unknown }).code = payload.code;
+  if (payload.cause !== undefined) (err as { cause?: unknown }).cause = deserializeError(payload.cause);
+  return err;
+}

@@ -37,8 +37,49 @@ void test('sendToPrimary rejects on ok=false', async () => {
   const client = createIpcClient({ send: fake.send.bind(fake), on: fake.on.bind(fake) });
   const p = client.sendToPrimary({ namespace: 'n', timeout: 1000, failsafe: 'resolve' }, { op: 'get', key: 'k' });
   const sent = fake.sent[0] as { id: string };
-  fake.deliver({ id: sent.id, source: SOURCE, ok: false, error: 'boom' });
+  fake.deliver({ id: sent.id, source: SOURCE, ok: false, error: { name: 'Error', message: 'boom' } });
   await assert.rejects(p, /boom/);
+});
+
+void test('sendToPrimary rejects with reconstructed Error preserving name and code', async () => {
+  const fake = makeFakeProcess();
+  const client = createIpcClient({ send: fake.send.bind(fake), on: fake.on.bind(fake) });
+  const p = client.sendToPrimary({ namespace: 'n', timeout: 1000, failsafe: 'resolve' }, { op: 'get', key: 'k' });
+  const sent = fake.sent[0] as { id: string };
+  fake.deliver({
+    id: sent.id,
+    source: SOURCE,
+    ok: false,
+    error: { name: 'CustomErr', message: 'oops', code: 'E_CUSTOM' },
+  });
+  await assert.rejects(p, (err: unknown) => {
+    assert.ok(err instanceof Error);
+    assert.equal(err.name, 'CustomErr');
+    assert.equal(err.message, 'oops');
+    assert.equal((err as { code?: unknown }).code, 'E_CUSTOM');
+    return true;
+  });
+});
+
+void test('sendToPrimary rejects with chained cause', async () => {
+  const fake = makeFakeProcess();
+  const client = createIpcClient({ send: fake.send.bind(fake), on: fake.on.bind(fake) });
+  const p = client.sendToPrimary({ namespace: 'n', timeout: 1000, failsafe: 'resolve' }, { op: 'get', key: 'k' });
+  const sent = fake.sent[0] as { id: string };
+  fake.deliver({
+    id: sent.id,
+    source: SOURCE,
+    ok: false,
+    error: { name: 'Outer', message: 'top', cause: { name: 'Inner', message: 'root' } },
+  });
+  await assert.rejects(p, (err: unknown) => {
+    assert.ok(err instanceof Error);
+    const cause = (err as { cause?: unknown }).cause;
+    assert.ok(cause instanceof Error);
+    assert.equal(cause.name, 'Inner');
+    assert.equal(cause.message, 'root');
+    return true;
+  });
 });
 
 void test('sendToPrimary ignores responses with foreign source', async () => {

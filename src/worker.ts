@@ -1,11 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import { setTimeout, clearTimeout } from 'node:timers';
 import Debug from 'debug';
-import { SOURCE, type Request, type Response } from './messages.js';
+import { SOURCE, deserializeError, type Request, type Response } from './messages.js';
 
 const messagesDebug = Debug(`${SOURCE}-messages`);
 
-export type SendOptions = {
+type SendOptions = {
   namespace: string;
   timeout: number;
   failsafe: 'resolve' | 'reject';
@@ -50,7 +50,7 @@ export function createIpcClient(proc: ProcessLike): IpcClient {
         callbacks.set(id, (response) => {
           clearTimeout(timer);
           if (response.ok) resolve(response.value as T);
-          else reject(new Error(response.error));
+          else reject(deserializeError(response.error));
         });
 
         messagesDebug('worker -> primary', request);

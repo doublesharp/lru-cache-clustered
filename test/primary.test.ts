@@ -58,6 +58,21 @@ void test('handleRequest op=init rejects conflicting options for an existing nam
   assert.match((second as { error: { message: string } }).error.message, /Conflicting options/);
 });
 
+void test('handleRequest op=init ignores explicitly undefined options on reuse', () => {
+  caches.clear();
+  stats.clear();
+  const first = handleRequest(req({ op: 'init', options: { max: 7, ttl: 1000 } }));
+  assert.equal(first.ok, true);
+
+  const second = handleRequest(req({ op: 'init', options: { max: 7, ttl: undefined } }));
+  assert.equal(second.ok, true);
+  assert.deepEqual((second as { value: unknown }).value, {
+    namespace: 'ns-init',
+    isNew: false,
+    max: 7,
+  });
+});
+
 void test('handleRequest CRUD ops', () => {
   caches.clear();
   const ns = 'crud';

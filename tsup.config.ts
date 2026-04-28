@@ -5,6 +5,7 @@ export default defineConfig({
   format: ['cjs', 'esm'],
   dts: false,
   clean: true,
+  minify: true,
   sourcemap: true,
   target: 'node22',
   outDir: 'dist',

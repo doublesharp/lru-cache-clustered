@@ -34,7 +34,7 @@ export class LRUCacheForClustersAsPromised<K = string, V = unknown> {
   // fetcher — even within a single worker. Likewise, different workers don't
   // share in-flight state. If at-most-once invocation across the cluster is
   // required, the fetcher needs its own coordination.
-  readonly #inFlight = new Map<K, Promise<V>>();
+  readonly #inFlight = new Map<K, { promise: Promise<V> }>();
 
   constructor(options: LRUCacheClusterOptions & InternalOptions = {}) {
     this.namespace = options.namespace ?? 'default';
@@ -209,25 +209,39 @@ export class LRUCacheForClustersAsPromised<K = string, V = unknown> {
     // in-flight slot; piggybacking on a previous fetcher's result would
     // contradict the "force a fresh fetch" intent. The new fetch overwrites
     // the in-flight slot so subsequent non-force callers can still dedup.
+    //
+    // Install the slot before the first await so concurrent callers piggyback
+    // on a single miss-path `get()` instead of each issuing their own read.
     if (!opts?.forceRefresh) {
-      const cached = await this.get(key);
-      if (cached !== undefined) return cached;
       const existing = this.#inFlight.get(key);
-      if (existing) return existing;
+      if (existing) return existing.promise;
     }
+
+    let slot!: { promise: Promise<V> };
     const run = async (): Promise<V> => {
-      const v = await fetcher(key);
-      await this.set(key, v, { ttl: opts?.ttl });
+      if (!opts?.forceRefresh) {
+        const cached = await this.get(key);
+        if (cached !== undefined) return cached;
+      }
+
+      const v = (await fetcher(key)) as V;
+      // A newer forceRefresh fetch may have replaced this slot. In that case
+      // keep the older caller's return value but don't let it overwrite the
+      // fresher cache contents.
+      if (this.#inFlight.get(key) === slot) {
+        await this.set(key, v, { ttl: opts?.ttl });
+      }
       return v;
     };
-    const p = run();
-    this.#inFlight.set(key, p);
+
+    slot = { promise: run() };
+    this.#inFlight.set(key, slot);
     try {
-      return await p;
+      return await slot.promise;
     } finally {
       // Identity check — a newer forceRefresh fetch may have replaced our
-      // slot. Only clear if this promise is still the slot's value.
-      if (this.#inFlight.get(key) === p) this.#inFlight.delete(key);
+      // slot. Only clear if this slot is still current.
+      if (this.#inFlight.get(key) === slot) this.#inFlight.delete(key);
     }
   }
 

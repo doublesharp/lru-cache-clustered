@@ -38,6 +38,39 @@ void test('memoize dedups concurrent calls for the same key', async () => {
   assert.equal(calls, 1);
 });
 
+void test('memoize shares a single miss-path get across concurrent callers', async () => {
+  let getCalls = 0;
+  let setCalls = 0;
+  let fnCalls = 0;
+
+  const cache = {
+    get: async () => {
+      getCalls += 1;
+      await new Promise((r) => setTimeout(r, 10));
+      return undefined;
+    },
+    set: async () => {
+      setCalls += 1;
+      return true;
+    },
+  } as unknown as LRUCacheForClustersAsPromised<string, number>;
+
+  const memo = memoize(
+    cache,
+    async (n: number) => {
+      fnCalls += 1;
+      return n + 1;
+    },
+    (n: number) => `n:${n}`,
+  );
+
+  const results = await Promise.all([memo(1), memo(1), memo(1)]);
+  assert.deepEqual(results, [2, 2, 2]);
+  assert.equal(getCalls, 1);
+  assert.equal(fnCalls, 1);
+  assert.equal(setCalls, 1);
+});
+
 void test('memoize calls fn independently for different keys', async () => {
   caches.clear();
   const cache = new LRUCacheForClustersAsPromised<string, number>({ namespace: 'memo-3', max: 10 });

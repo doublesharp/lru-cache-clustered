@@ -13,7 +13,7 @@ void test('getOrCreateCache creates a cache for a new namespace', () => {
 void test('getOrCreateCache returns existing cache for known namespace', () => {
   caches.clear();
   const a = getOrCreateCache('beta', { max: 3 });
-  const b = getOrCreateCache('beta', { max: 99 });
+  const b = getOrCreateCache('beta', { max: 3 });
   assert.equal(a, b);
   assert.equal(a.max, 3);
 });
@@ -38,13 +38,24 @@ void test('handleRequest op=init creates cache and returns ok', () => {
 void test('handleRequest op=init reuses cache and returns isNew=false', () => {
   caches.clear();
   handleRequest(req({ op: 'init', options: { max: 7 } }));
-  const r = handleRequest(req({ op: 'init', options: { max: 99 } }));
+  const r = handleRequest(req({ op: 'init', options: { max: 7 } }));
   assert.equal(r.ok, true);
   assert.deepEqual((r as { value: unknown }).value, {
     namespace: 'ns-init',
     isNew: false,
     max: 7,
   });
+});
+
+void test('handleRequest op=init rejects conflicting options for an existing namespace', () => {
+  caches.clear();
+  stats.clear();
+  const first = handleRequest(req({ op: 'init', options: { max: 7, ttl: 1000 } }));
+  assert.equal(first.ok, true);
+
+  const second = handleRequest(req({ op: 'init', options: { max: 8 } }));
+  assert.equal(second.ok, false);
+  assert.match((second as { error: { message: string } }).error.message, /Conflicting options/);
 });
 
 void test('handleRequest CRUD ops', () => {
@@ -158,6 +169,18 @@ void test('handleRequest config getters and setters', () => {
   assert.equal((d('allowStale', { value: true }) as { value: unknown }).value, true);
 });
 
+void test('handleRequest rejects nullish keys and values', () => {
+  caches.clear();
+  stats.clear();
+  const ns = 'nullish-dispatch';
+  const d = (op: string, extra: object = {}) =>
+    handleRequest({ id: 'r', namespace: ns, source: SOURCE, op, ...extra } as Request);
+
+  assert.equal(d('set', { key: undefined, value: 'v' }).ok, false);
+  assert.equal(d('set', { key: 'k', value: undefined }).ok, false);
+  assert.equal(d('get', { key: null }).ok, false);
+});
+
 void test('handleRequest returns error for unknown op', () => {
   const r = handleRequest({ id: 'r', namespace: 'x', source: SOURCE, op: 'bogus' } as unknown as Request);
   assert.equal(r.ok, false);
@@ -195,6 +218,26 @@ void test('handleRequest max setter rebuilds the cache, preserving entries', () 
   // Tunables preserved.
   assert.equal((d('ttl') as { value: unknown }).value, 1000);
   assert.equal((d('allowStale') as { value: unknown }).value, true);
+});
+
+void test('handleRequest max setter preserves per-entry remaining TTL', async () => {
+  caches.clear();
+  stats.clear();
+  const ns = 'rebuild-ttl';
+  const d = (op: string, extra: object = {}) =>
+    handleRequest({ id: 'r', namespace: ns, source: SOURCE, op, ...extra } as Request);
+
+  d('init', { options: { max: 10 } });
+  d('set', { key: 'k', value: 'v', ttl: 50 });
+  await new Promise((r) => setTimeout(r, 20));
+  const before = (d('getRemainingTTL', { key: 'k' }) as { value: number }).value;
+
+  d('max', { value: 20 });
+  const after = (d('getRemainingTTL', { key: 'k' }) as { value: number }).value;
+
+  assert.ok(before > 0);
+  assert.ok(after > 0, `expected positive ttl after rebuild, got ${after}`);
+  assert.ok(after <= before, `expected ttl to keep ticking down (${after} <= ${before})`);
 });
 
 void test('handleRequest max setter preserves all SerializableLruOptions', () => {

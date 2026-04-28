@@ -68,6 +68,21 @@ void test('primary-mode config getters/setters', async () => {
   assert.equal(await cache.allowStale(true), true);
 });
 
+void test('primary-mode max setter preserves per-entry TTL metadata', async () => {
+  caches.clear();
+  const cache = new LRUCacheForClustersAsPromised<string, string>({ namespace: 'idx-5-ttl', max: 10 });
+  await cache.set('k', 'v', { ttl: 50 });
+  await new Promise((r) => setTimeout(r, 20));
+  const before = await cache.getRemainingTTL('k');
+
+  await cache.max(50);
+  const after = await cache.getRemainingTTL('k');
+
+  assert.ok(before > 0);
+  assert.ok(after > 0, `expected positive ttl after rebuild, got ${after}`);
+  assert.ok(after <= before, `expected ttl to keep ticking down (${after} <= ${before})`);
+});
+
 void test('namespace isolation between instances', async () => {
   caches.clear();
   const a = new LRUCacheForClustersAsPromised({ namespace: 'iso-a' });
@@ -138,6 +153,14 @@ void test('set with ttl and mSet with ttl', async () => {
   assert.equal(await cache.get('c'), 'C');
 });
 
+void test('primary-mode rejects nullish keys and values', async () => {
+  caches.clear();
+  const cache = new LRUCacheForClustersAsPromised<string, string>({ namespace: 'nullish', max: 10 });
+  await assert.rejects(cache.set(undefined as never, 'v'), /cache key must not be null or undefined/);
+  await assert.rejects(cache.set('k', undefined as never), /cache value must not be null or undefined/);
+  await assert.rejects(cache.get(null as never), /cache key must not be null or undefined/);
+});
+
 void test('options defaults and explicit failsafe=reject', () => {
   caches.clear();
   const cdef = new LRUCacheForClustersAsPromised();
@@ -153,6 +176,12 @@ void test('options defaults and explicit failsafe=reject', () => {
   assert.equal(ccustom.namespace, 'cn');
   assert.equal(ccustom.timeout, 250);
   assert.equal(ccustom.failsafe, 'reject');
+});
+
+void test('namespace re-init rejects conflicting cache options', () => {
+  caches.clear();
+  new LRUCacheForClustersAsPromised({ namespace: 'conflict', max: 1, ttl: 111 });
+  assert.throws(() => new LRUCacheForClustersAsPromised({ namespace: 'conflict', max: 2 }), /Conflicting options/);
 });
 
 void test('dispatch rejects when handler throws', async () => {
@@ -330,6 +359,35 @@ void test('fetch dedups concurrent calls and caches result', async () => {
   assert.equal(calls, 1);
 });
 
+void test('fetch shares a single miss-path get across concurrent callers', async () => {
+  caches.clear();
+  const cache = new LRUCacheForClustersAsPromised<string, number>({ namespace: 'fetch-get-dedup', max: 10 });
+  let getCalls = 0;
+  let setCalls = 0;
+  let fetchCalls = 0;
+
+  (cache as { get: (key: string) => Promise<number | undefined> }).get = async () => {
+    getCalls += 1;
+    await new Promise((r) => setTimeout(r, 10));
+    return undefined;
+  };
+  (cache as { set: (key: string, value: number, opts?: { ttl?: number }) => Promise<boolean> }).set = async () => {
+    setCalls += 1;
+    return true;
+  };
+
+  const fetcher = async () => {
+    fetchCalls += 1;
+    return 7;
+  };
+
+  const results = await Promise.all([cache.fetch('k', fetcher), cache.fetch('k', fetcher), cache.fetch('k', fetcher)]);
+  assert.deepEqual(results, [7, 7, 7]);
+  assert.equal(getCalls, 1);
+  assert.equal(fetchCalls, 1);
+  assert.equal(setCalls, 1);
+});
+
 void test('fetch with forceRefresh re-invokes fetcher', async () => {
   caches.clear();
   const cache = new LRUCacheForClustersAsPromised<string, number>({ namespace: 'fetch-2', max: 10 });
@@ -366,6 +424,24 @@ void test('fetch forceRefresh ignores stale in-flight result', async () => {
   // the in-flight slot). The contract we care about here is just that the
   // force caller saw fresh data.
   await a;
+});
+
+void test('fetch forceRefresh keeps the refreshed value cached when an older fetch finishes later', async () => {
+  caches.clear();
+  const cache = new LRUCacheForClustersAsPromised<string, number>({ namespace: 'fetch-force-final', max: 10 });
+
+  const stale = async () => {
+    await new Promise((r) => setTimeout(r, 20));
+    return 1;
+  };
+  const fresh = async () => 2;
+
+  const older = cache.fetch('k', stale);
+  await Promise.resolve();
+
+  assert.equal(await cache.fetch('k', fresh, { forceRefresh: true }), 2);
+  await older;
+  assert.equal(await cache.get('k'), 2);
 });
 
 void test('fetch propagates fetcher errors and clears in-flight slot', async () => {

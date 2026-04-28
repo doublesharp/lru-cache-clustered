@@ -62,11 +62,11 @@ if (cluster.isPrimary) {
 - **In the primary** (`cluster.isPrimary === true`), the instance owns and directly operates on the in-process `LRUCache` for its namespace — no IPC, no allocation per call.
 - **In a worker**, every operation becomes a typed IPC request to the primary; the returned Promise resolves with the response.
 
-Instances in different workers that share a `namespace` operate on the same primary-side cache. That's where the memory savings come from.
+Instances in different workers that share a `namespace` operate on the same primary-side cache. That's where the memory savings come from. Those instances should agree on cache options (`max`, `ttl`, `allowStale`, ...): reusing a namespace with conflicting options throws rather than silently keeping whichever process initialized it first.
 
 ## Options
 
-All `LRUCache` constructor options from [`lru-cache@11`](https://github.com/isaacs/node-lru-cache) pass through (`max`, `ttl`, `allowStale`, `updateAgeOnGet`, …). Plus:
+The serializable subset of [`lru-cache@11`](https://github.com/isaacs/node-lru-cache) constructor options passes through (`max`, `ttl`, `allowStale`, `updateAgeOnGet`, `updateAgeOnHas`, `noDeleteOnStaleGet`, `ttlAutopurge`). Plus:
 
 | Option      | Type                    | Default     | Description                                                                                                   |
 | ----------- | ----------------------- | ----------- | ------------------------------------------------------------------------------------------------------------- |
@@ -75,6 +75,8 @@ All `LRUCache` constructor options from [`lru-cache@11`](https://github.com/isaa
 | `failsafe`  | `'resolve' \| 'reject'` | `'resolve'` | On worker IPC timeout: `'resolve'` resolves with `undefined`; `'reject'` rejects with `Error('IPC timeout')`. |
 
 > **`failsafe: 'resolve'` caveat.** On timeout, `'resolve'` returns `undefined` for _every_ op, regardless of declared return type. For `get` / `peek` that's natural; for `has` / `set` / `delete` / `incr` / `decr` / `size` it can surprise callers (`undefined + 1 === NaN`). Use `'reject'` if typed-shape correctness on timeout matters.
+
+> **Key/value contract.** Like `lru-cache@11`, keys and values must be non-nullish. Passing `null` or `undefined` rejects instead of relying on ambiguous cache semantics.
 
 ## API
 

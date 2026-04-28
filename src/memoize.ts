@@ -23,11 +23,6 @@ export function memoize<Args extends unknown[], K extends {}, V extends {}>(
   return async (...args: Args): Promise<V> => {
     const key = keyFn(...args);
 
-    const cached = await cache.get(key);
-    if (cached !== undefined) {
-      return cached;
-    }
-
     let inFlight = inFlightByCache.get(cache);
     if (!inFlight) {
       inFlight = new Map<unknown, Promise<unknown>>();
@@ -41,7 +36,11 @@ export function memoize<Args extends unknown[], K extends {}, V extends {}>(
     }
 
     const pending: Promise<V> = (async () => {
-      const value = await fn(...args);
+      const cached = await cache.get(key);
+      if (cached !== undefined) {
+        return cached;
+      }
+      const value = (await fn(...args)) as V;
       await cache.set(key, value, ttl !== undefined ? { ttl } : undefined);
       return value;
     })();

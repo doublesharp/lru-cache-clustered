@@ -4,9 +4,11 @@ import { DEBUG_PREFIX, SOURCE, deserializeError, type Request, type Response } f
 
 const messagesDebug = Debug(`${DEBUG_PREFIX}-messages`);
 
-// Monotonic per-process request ID. Each IpcClient gets its own counter via
-// closure, so client instances never collide. Avoids randomUUID's ~1µs cost
-// and keeps wire-format IDs short (1-10 chars vs UUID's 36).
+// Monotonic per-process request ID, shared across all IpcClient instances
+// in this worker. Uniqueness within the process is the only requirement —
+// the primary keys responses by id and only this worker reads them back.
+// Avoids randomUUID's ~1µs cost and keeps wire-format IDs short (1-10
+// chars vs UUID's 36).
 let nextRequestId = 0;
 
 type SendOptions = {

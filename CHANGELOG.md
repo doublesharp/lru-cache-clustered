@@ -17,7 +17,7 @@
 - Dual ESM + CJS publish via `package.json` `exports`
 - Generic types: `LRUCacheForClustersAsPromised<K, V>`
 - Node `>=22` required
-- Dropped runtime deps: `cron`, `uuid` (uses `crypto.randomUUID`)
+- Dropped runtime deps: `cron`, `uuid` — request IDs use a per-process monotonic counter
 - pnpm for development; node:test + c8 for tests/coverage; tsup + tsc for build
 - 100% line/statement/function coverage
 - CI: GitHub Actions, node 22 and 24 matrix, Codecov upload

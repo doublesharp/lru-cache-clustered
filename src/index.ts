@@ -28,8 +28,12 @@ export class LRUCacheForClustersAsPromised<K = string, V = unknown> {
   readonly ready: Promise<void>;
   readonly #lruOptions: SerializableLruOptions;
   readonly #client: IpcClient;
-  // Worker-local in-flight dedup for fetch(); concurrent fetches in *different*
-  // workers may both invoke the fetcher since this map is not shared.
+  // Per-instance in-flight dedup for fetch(). Two `LRUCacheForClustersAsPromised`
+  // instances pointing at the same namespace each have their own #inFlight map,
+  // so concurrent fetches across separate instances will each invoke the
+  // fetcher — even within a single worker. Likewise, different workers don't
+  // share in-flight state. If at-most-once invocation across the cluster is
+  // required, the fetcher needs its own coordination.
   readonly #inFlight = new Map<K, Promise<V>>();
 
   constructor(options: LRUCacheClusterOptions & InternalOptions = {}) {
@@ -82,11 +86,11 @@ export class LRUCacheForClustersAsPromised<K = string, V = unknown> {
     return caches;
   }
 
-  getCache(): LRUCache<NonNullish, NonNullish> | undefined {
+  getCache(): LRUCache<K & NonNullish, V & NonNullish> | undefined {
     if (cluster.isWorker) {
       throw new Error('LRUCacheForClustersAsPromised.getCache() must not be called from a worker');
     }
-    return caches.get(this.namespace);
+    return caches.get(this.namespace) as LRUCache<K & NonNullish, V & NonNullish> | undefined;
   }
 
   // Per-method API:
@@ -201,23 +205,30 @@ export class LRUCacheForClustersAsPromised<K = string, V = unknown> {
     fetcher: (key: K) => Promise<V> | V,
     opts?: { ttl?: number; forceRefresh?: boolean },
   ): Promise<V> {
+    // forceRefresh bypasses BOTH the cached-value check and the existing
+    // in-flight slot; piggybacking on a previous fetcher's result would
+    // contradict the "force a fresh fetch" intent. The new fetch overwrites
+    // the in-flight slot so subsequent non-force callers can still dedup.
     if (!opts?.forceRefresh) {
       const cached = await this.get(key);
       if (cached !== undefined) return cached;
+      const existing = this.#inFlight.get(key);
+      if (existing) return existing;
     }
-    const existing = this.#inFlight.get(key);
-    if (existing) return existing;
-    const p = (async () => {
-      try {
-        const v = await fetcher(key);
-        await this.set(key, v, { ttl: opts?.ttl });
-        return v;
-      } finally {
-        this.#inFlight.delete(key);
-      }
-    })();
+    const run = async (): Promise<V> => {
+      const v = await fetcher(key);
+      await this.set(key, v, { ttl: opts?.ttl });
+      return v;
+    };
+    const p = run();
     this.#inFlight.set(key, p);
-    return p;
+    try {
+      return await p;
+    } finally {
+      // Identity check — a newer forceRefresh fetch may have replaced our
+      // slot. Only clear if this promise is still the slot's value.
+      if (this.#inFlight.get(key) === p) this.#inFlight.delete(key);
+    }
   }
 
   #dispatch<T>(payload: ExecPayload): Promise<T> {

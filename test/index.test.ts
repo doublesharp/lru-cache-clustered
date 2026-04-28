@@ -344,6 +344,30 @@ void test('fetch with forceRefresh re-invokes fetcher', async () => {
   assert.equal(calls, 2);
 });
 
+void test('fetch forceRefresh ignores stale in-flight result', async () => {
+  caches.clear();
+  const cache = new LRUCacheForClustersAsPromised<string, number>({ namespace: 'fetch-force', max: 10 });
+
+  // First in-flight fetcher returns a stale value.
+  const stale = async () => {
+    await new Promise((r) => setTimeout(r, 20));
+    return 1;
+  };
+  // Second fetcher returns the fresh value the forceRefresh caller wants.
+  const fresh = async () => 2;
+
+  const a = cache.fetch('k', stale); // non-force, in-flight, will return 1
+  const b = cache.fetch('k', fresh, { forceRefresh: true });
+  // The force caller must NOT piggyback on `stale`'s result; it must invoke
+  // its own fetcher and resolve to 2.
+  assert.equal(await b, 2);
+  // The non-force caller is allowed to dedup onto whatever is in flight when
+  // it resumes (could be the force caller's promise, since force overwrote
+  // the in-flight slot). The contract we care about here is just that the
+  // force caller saw fresh data.
+  await a;
+});
+
 void test('fetch propagates fetcher errors and clears in-flight slot', async () => {
   caches.clear();
   const cache = new LRUCacheForClustersAsPromised<string, string>({ namespace: 'fetch-3', max: 10 });

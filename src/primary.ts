@@ -47,18 +47,48 @@ function getStats(namespace: string): Stats {
   return s;
 }
 
+// Capture the runtime-readable SerializableLruOptions off an existing cache.
+// Used by the `max` rebuild so the new instance keeps every tunable the old
+// one had — not just `ttl` and `allowStale`. lru-cache@11 exposes these as
+// instance properties; we go through `as unknown as ...` rather than typing
+// the full LRUCache interface here.
+function readOptions(cache: AnyCache): SerializableLruOptions {
+  const c = cache as unknown as {
+    max: number;
+    ttl: number;
+    allowStale: boolean;
+    updateAgeOnGet: boolean;
+    updateAgeOnHas: boolean;
+    noDeleteOnStaleGet: boolean;
+    ttlAutopurge: boolean;
+  };
+  return {
+    max: c.max,
+    ttl: c.ttl,
+    allowStale: c.allowStale,
+    updateAgeOnGet: c.updateAgeOnGet,
+    updateAgeOnHas: c.updateAgeOnHas,
+    noDeleteOnStaleGet: c.noDeleteOnStaleGet,
+    ttlAutopurge: c.ttlAutopurge,
+  };
+}
+
+function buildCache(options: SerializableLruOptions, s: Stats): AnyCache {
+  return new LRUCache({
+    max: 1000,
+    ...options,
+    dispose: (_value: NonNullish, _key: NonNullish, reason: LRUCache.DisposeReason) => {
+      if (reason === 'evict') s.evictions += 1;
+    },
+  });
+}
+
 export function getOrCreateCache(namespace: string, options?: SerializableLruOptions): AnyCache {
   let cache = caches.get(namespace);
   if (!cache) {
     const s = freshStats(namespace);
     stats.set(namespace, s);
-    cache = new LRUCache({
-      max: 1000,
-      ...options,
-      dispose: (_value: NonNullish, _key: NonNullish, reason: LRUCache.DisposeReason) => {
-        if (reason === 'evict') s.evictions += 1;
-      },
-    });
+    cache = buildCache(options ?? {}, s);
     caches.set(namespace, cache);
     debug(`Created LRUCache for namespace '${namespace}'`);
   }
@@ -187,20 +217,19 @@ export function dispatchOp(namespace: string, payload: ExecPayload): unknown {
     case 'max': {
       const cache = getOrCreateCache(namespace);
       if (typeof payload.value === 'number' && payload.value !== cache.max) {
-        // lru-cache@11 has no setter for max — rebuild the cache preserving
-        // current entries (most recent first) and other tunables. Reuse the
-        // existing stats record so the dispose hook for the new instance
-        // continues to count evictions for the same namespace.
+        // lru-cache@11 has no setter for max — rebuild. Two correctness points:
+        // (1) preserve every SerializableLruOptions field, not just ttl and
+        //     allowStale, so updateAgeOnGet/updateAgeOnHas/etc. survive;
+        // (2) replay entries in LRU-first order so the originally-MRU stays
+        //     MRU after the rebuild — `cache.entries()` yields MRU-first, so
+        //     reverse it before re-setting.
+        // Reuse the existing stats record so the new dispose hook keeps
+        // counting evictions for the same namespace.
         const s = getStats(namespace);
-        const replacement: AnyCache = new LRUCache({
-          max: payload.value,
-          ttl: (cache as unknown as { ttl: number }).ttl,
-          allowStale: (cache as unknown as { allowStale: boolean }).allowStale,
-          dispose: (_value: NonNullish, _key: NonNullish, reason: LRUCache.DisposeReason) => {
-            if (reason === 'evict') s.evictions += 1;
-          },
-        });
-        for (const [key, value] of cache.entries()) replacement.set(key, value);
+        const opts = { ...readOptions(cache), max: payload.value };
+        const replacement = buildCache(opts, s);
+        const ordered = [...cache.entries()].reverse();
+        for (const [key, value] of ordered) replacement.set(key, value);
         caches.set(namespace, replacement);
         return replacement.max;
       }
@@ -213,8 +242,7 @@ export function dispatchOp(namespace: string, payload: ExecPayload): unknown {
     }
     case 'allowStale': {
       const cache = getOrCreateCache(namespace);
-      if (typeof payload.value === 'boolean')
-        (cache as unknown as { allowStale: boolean }).allowStale = payload.value;
+      if (typeof payload.value === 'boolean') (cache as unknown as { allowStale: boolean }).allowStale = payload.value;
       return (cache as unknown as { allowStale: boolean }).allowStale;
     }
     default: {

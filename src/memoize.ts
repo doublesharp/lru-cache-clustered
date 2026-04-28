@@ -9,14 +9,13 @@ export interface MemoizeOptions {
 // the same key share a single Promise. Different workers will not share the
 // in-flight slot, so they may both invoke `fn` (matching the existing
 // per-worker semantics elsewhere in this library).
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const inFlightByCache = new WeakMap<object, Map<string, Promise<any>>>();
+const inFlightByCache = new WeakMap<object, Map<unknown, Promise<unknown>>>();
 
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type
-export function memoize<Args extends unknown[], V extends {}>(
-  cache: LRUCacheForClustersAsPromised<string, V>,
+export function memoize<Args extends unknown[], K extends {}, V extends {}>(
+  cache: LRUCacheForClustersAsPromised<K, V>,
   fn: (...args: Args) => Promise<V> | V,
-  keyFn: (...args: Args) => string,
+  keyFn: (...args: Args) => K,
   opts?: MemoizeOptions,
 ): (...args: Args) => Promise<V> {
   const ttl = opts?.ttl;
@@ -31,11 +30,12 @@ export function memoize<Args extends unknown[], V extends {}>(
 
     let inFlight = inFlightByCache.get(cache);
     if (!inFlight) {
-      inFlight = new Map<string, Promise<V>>();
+      inFlight = new Map<unknown, Promise<unknown>>();
       inFlightByCache.set(cache, inFlight);
     }
+    const typedInFlight = inFlight as Map<K, Promise<V>>;
 
-    const existing = inFlight.get(key) as Promise<V> | undefined;
+    const existing = typedInFlight.get(key);
     if (existing) {
       return existing;
     }
@@ -46,14 +46,14 @@ export function memoize<Args extends unknown[], V extends {}>(
       return value;
     })();
 
-    inFlight.set(key, pending);
+    typedInFlight.set(key, pending);
 
     try {
       return await pending;
     } finally {
       // Clear the slot regardless of success/failure so a failed call doesn't
       // poison subsequent retries.
-      const map = inFlightByCache.get(cache);
+      const map = inFlightByCache.get(cache) as Map<K, Promise<V>> | undefined;
       if (map?.get(key) === pending) {
         map.delete(key);
       }

@@ -197,6 +197,65 @@ void test('handleRequest max setter rebuilds the cache, preserving entries', () 
   assert.equal((d('allowStale') as { value: unknown }).value, true);
 });
 
+void test('handleRequest max setter preserves all SerializableLruOptions', () => {
+  caches.clear();
+  const ns = 'rebuild-tunables';
+  const d = (op: string, extra: object = {}) =>
+    handleRequest({ id: 'r', namespace: ns, source: SOURCE, op, ...extra } as Request);
+
+  d('init', {
+    options: {
+      max: 10,
+      ttl: 1000,
+      allowStale: true,
+      updateAgeOnGet: true,
+      updateAgeOnHas: true,
+      noDeleteOnStaleGet: true,
+      ttlAutopurge: true,
+    },
+  });
+  d('set', { key: 'a', value: 1 });
+  d('max', { value: 50 });
+
+  // All fields should survive the rebuild — read straight off the underlying cache.
+  const cache = caches.get(ns) as unknown as {
+    max: number;
+    ttl: number;
+    allowStale: boolean;
+    updateAgeOnGet: boolean;
+    updateAgeOnHas: boolean;
+    noDeleteOnStaleGet: boolean;
+    ttlAutopurge: boolean;
+  };
+  assert.equal(cache.max, 50);
+  assert.equal(cache.ttl, 1000);
+  assert.equal(cache.allowStale, true);
+  assert.equal(cache.updateAgeOnGet, true);
+  assert.equal(cache.updateAgeOnHas, true);
+  assert.equal(cache.noDeleteOnStaleGet, true);
+  assert.equal(cache.ttlAutopurge, true);
+});
+
+void test('handleRequest max setter preserves LRU order (MRU stays MRU)', () => {
+  caches.clear();
+  const ns = 'rebuild-order';
+  const d = (op: string, extra: object = {}) =>
+    handleRequest({ id: 'r', namespace: ns, source: SOURCE, op, ...extra } as Request);
+
+  d('init', { options: { max: 10 } });
+  // Insertion order: 'lru' first → 'mru' last. After this, 'mru' is most recent.
+  d('set', { key: 'lru', value: 1 });
+  d('set', { key: 'mru', value: 2 });
+
+  // Shrink to size 1 — under correct LRU semantics, 'lru' (least recent) is
+  // evicted and 'mru' survives. The pre-fix bug reversed this.
+  d('max', { value: 1 });
+  const survivor = (d('keys') as { value: unknown[] }).value;
+  assert.deepEqual(survivor, ['mru']);
+  assert.equal((d('get', { key: 'mru' }) as { value: unknown }).value, 2);
+  assert.equal((d('get', { key: 'lru' }) as { value: unknown }).value, undefined);
+});
+
 void test('handleRequest op=getRemainingTTL returns a positive ttl when set', () => {
   caches.clear();
   stats.clear();

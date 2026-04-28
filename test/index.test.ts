@@ -440,6 +440,52 @@ void test('fetch shares a single miss-path get across concurrent callers', async
   assert.equal(fetchCalls, 1);
 });
 
+void test('fetch followers in another instance reuse the leader result', async () => {
+  caches.clear();
+  const namespace = 'fetch-cross-instance-follower';
+  const leaderCache = new LRUCacheForClustersAsPromised<string, string>({ namespace, max: 10 });
+  const followerCache = new LRUCacheForClustersAsPromised<string, string>({ namespace, max: 10 });
+  const originalPeek = followerCache.peek.bind(followerCache);
+  let releaseLeader!: () => void;
+  let leaderEntered!: () => void;
+  let followerObservedMiss!: () => void;
+  let leader!: Promise<string>;
+  let followerPeekCalls = 0;
+  const leaderGate = new Promise<void>((resolve) => {
+    releaseLeader = resolve;
+  });
+  const leaderStarted = new Promise<void>((resolve) => {
+    leaderEntered = resolve;
+  });
+  const followerMissed = new Promise<void>((resolve) => {
+    followerObservedMiss = resolve;
+  });
+  (followerCache as { peek: (key: string) => Promise<string | undefined> }).peek = async (key) => {
+    followerPeekCalls += 1;
+    if (followerPeekCalls === 1) {
+      followerObservedMiss();
+      return undefined;
+    }
+    releaseLeader();
+    await leader;
+    return originalPeek(key);
+  };
+
+  leader = leaderCache.fetch('k', async () => {
+    leaderEntered();
+    await leaderGate;
+    return 'shared';
+  });
+  await leaderStarted;
+
+  const follower = followerCache.fetch('k', () => {
+    throw new Error('follower should not run fetcher');
+  });
+  await followerMissed;
+
+  assert.deepEqual(await Promise.all([leader, follower]), ['shared', 'shared']);
+});
+
 void test('fetch with forceRefresh re-invokes fetcher', async () => {
   caches.clear();
   const cache = new LRUCacheForClustersAsPromised<string, number>({ namespace: 'fetch-2', max: 10 });
@@ -529,4 +575,28 @@ void test('fetch propagates fetcher errors and clears in-flight slot', async () 
   const ok = async () => 'recovered';
   assert.equal(await cache.fetch('k', ok), 'recovered');
   assert.equal(await cache.fetch('k', ok), 'recovered');
+});
+
+void test('fetch preserves fetcher errors when abort cleanup also fails', async () => {
+  caches.clear();
+  const cache = new LRUCacheForClustersAsPromised<string, string>({ namespace: 'fetch-cleanup-failure', max: 10 });
+  const state = (globalThis as Record<PropertyKey, unknown>)[Symbol.for('lru-cache-clustered.primary')] as {
+    fetchLocks: Map<unknown, unknown>;
+  };
+  const originalGet = state.fetchLocks.get.bind(state.fetchLocks);
+
+  try {
+    await assert.rejects(
+      cache.fetch('k', () => {
+        state.fetchLocks.get = () => {
+          throw new Error('cleanup failed');
+        };
+        throw new Error('fetch failed');
+      }),
+      /fetch failed/,
+    );
+  } finally {
+    state.fetchLocks.get = originalGet;
+    state.fetchLocks.clear();
+  }
 });

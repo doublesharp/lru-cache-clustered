@@ -127,9 +127,9 @@ export function wrap<K, V, U extends {}>(
     stats: () => cache.stats(),
 
     async fetch(key, fetcher, opts) {
-      // Reuse the underlying cache.fetch's worker-local in-flight dedup. Pass
-      // an inner fetcher that encodes the produced value — the cache stores
-      // and returns the encoded form, then we decode on the way out.
+      // Reuse the underlying cache.fetch single-flight path. Pass an inner
+      // fetcher that encodes the produced value — the cache stores and returns
+      // the encoded form, then we decode on the way out.
       const raw = await cache.fetch(key, async (k) => await enc(await fetcher(k)), opts);
       return await dec(raw);
     },

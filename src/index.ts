@@ -292,10 +292,13 @@ export class LRUCacheForClustersAsPromised<K = string, V = unknown> {
         }
 
         const observed = await this.peek(key);
-        if (observed !== undefined && !opts?.forceRefresh) return observed;
+        if (observed === undefined) {
+          forceRefresh = false;
+          await new Promise((resolve) => setTimeout(resolve, FETCH_POLL_MS));
+          continue;
+        }
 
-        forceRefresh = false;
-        await new Promise((resolve) => setTimeout(resolve, FETCH_POLL_MS));
+        return observed;
       }
     };
 

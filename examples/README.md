@@ -10,7 +10,7 @@ pnpm example:idempotency
 pnpm example:documents
 ```
 
-They import `../src/index.ts` so you can exercise the current workspace without building first. If you copy either example into another app, switch that import to `@0xdoublesharp/lru-cache-clustered`.
+They import `../src/index.ts` so you can exercise the current workspace without building first. If you copy an example into another app, switch that import to `@0xdoublesharp/lru-cache-clustered`.
 
 ## `clustered-users-server.ts`
 
@@ -100,7 +100,7 @@ What to look for:
 
 ## Environment variables
 
-Both examples accept:
+All examples accept:
 
 - `PORT`
 - `WORKERS`

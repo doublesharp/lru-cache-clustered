@@ -19,10 +19,10 @@ const CANONICAL_DOWNLOADS_BADGE =
 const LEGACY_DOWNLOADS_BADGE =
   '[![Downloads](https://img.shields.io/npm/dt/lru-cache-for-clusters-as-promised.svg)](https://www.npmjs.com/package/lru-cache-for-clusters-as-promised)';
 const CANONICAL_NOTE =
-  '> `@0xdoublesharp/lru-cache-clustered` is the canonical package name. `lru-cache-for-clusters-as-promised` remains published as a mirrored legacy alias during the migration window.';
+  '> `@0xdoublesharp/lru-cache-clustered` is the canonical package name. `lru-cache-for-clusters-as-promised` is published as a mirrored legacy alias from the same source.';
 const LEGACY_NOTE = [
   '> This package has moved. New installs should use `@0xdoublesharp/lru-cache-clustered`.',
-  '> `lru-cache-for-clusters-as-promised` is still published from the same source as a mirrored compatibility alias during the migration window.',
+  '> `lru-cache-for-clusters-as-promised` is published from the same source as a mirrored compatibility alias.',
 ].join('\n');
 
 await assertBuilt();
@@ -66,10 +66,19 @@ for (const variant of variants) {
 }
 
 async function assertBuilt() {
-  try {
-    await stat(distDir);
-  } catch {
-    throw new Error('Missing dist/. Run `pnpm build` before `pnpm run prepare:publish`.');
+  const requiredFiles = ['index.js', 'index.cjs', 'index.d.ts', 'index.d.cts'];
+  const missing = [];
+
+  for (const file of requiredFiles) {
+    try {
+      await stat(path.join(distDir, file));
+    } catch {
+      missing.push(file);
+    }
+  }
+
+  if (missing.length > 0) {
+    throw new Error(`Missing dist artifacts: ${missing.join(', ')}. Run \`pnpm build\` before publishing.`);
   }
 }
 

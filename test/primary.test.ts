@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { getOrCreateCache, caches, handleRequest, stats } from '../src/primary.ts';
+import cluster from 'node:cluster';
+import { getOrCreateCache, caches, handleRequest, installClusterListener, stats } from '../src/primary.ts';
 import { SOURCE, deserializeError, serializeError, type Request, type Stats } from '../src/messages.ts';
 
 type PrimaryModule = typeof import('../src/primary.ts');
@@ -36,6 +37,13 @@ void test('getOrCreateCache returns existing cache for known namespace', () => {
   const b = getOrCreateCache('beta', { max: 3 });
   assert.equal(a, b);
   assert.equal(a.max, 3);
+});
+
+void test('getOrCreateCache reuse allows omitted options', () => {
+  caches.clear();
+  const a = getOrCreateCache('beta-no-options');
+  const b = getOrCreateCache('beta-no-options');
+  assert.equal(a, b);
 });
 
 function req<T extends { op: string }>(extra: T) {
@@ -105,6 +113,62 @@ void test('handleRequest op=healthCheck creates or validates a namespace', () =>
   });
   assert.equal(r.ok, true);
   assert.ok(caches.has('health-ns'));
+});
+
+void test('handleRequest op=healthCheck rejects conflicting cache options', () => {
+  caches.clear();
+  stats.clear();
+  const first = handleRequest({
+    id: 'h1',
+    namespace: 'health-conflict',
+    source: SOURCE,
+    cacheOptions: { max: 5, ttl: 1_000 },
+    op: 'healthCheck',
+  });
+  assert.equal(first.ok, true);
+
+  const second = handleRequest({
+    id: 'h2',
+    namespace: 'health-conflict',
+    source: SOURCE,
+    cacheOptions: { max: 6 },
+    op: 'healthCheck',
+  });
+  assert.equal(second.ok, false);
+  assert.match((second as { error: { message: string } }).error.message, /Conflicting options/);
+});
+
+void test('cluster exit releases fetch locks owned by the exited worker', () => {
+  caches.clear();
+  stats.clear();
+  installClusterListener();
+
+  const namespace = 'exit-locks';
+  const workerId = 4242;
+  const request = (id: string) =>
+    ({
+      id,
+      namespace,
+      source: SOURCE,
+      cacheOptions: { max: 5 },
+      op: 'fetchClaim',
+      key: 'shared',
+      forceRefresh: false,
+    }) as Request;
+
+  const leader = handleRequest(request('leader'), { workerId });
+  assert.equal(leader.ok, true);
+  assert.equal((leader as { value: { kind: string } }).value.kind, 'leader');
+
+  const blocked = handleRequest(request('blocked'));
+  assert.equal(blocked.ok, true);
+  assert.deepEqual((blocked as { value: unknown }).value, { kind: 'follower' });
+
+  cluster.emit('exit', { id: workerId });
+
+  const next = handleRequest(request('next'));
+  assert.equal(next.ok, true);
+  assert.equal((next as { value: { kind: string } }).value.kind, 'leader');
 });
 
 void test('handleRequest CRUD ops', () => {
@@ -474,6 +538,43 @@ void test('handleRequest destroy removes cache, stats, and fetch locks', () => {
   assert.equal((d('destroy') as { value: unknown }).value, true);
   assert.equal(caches.has(ns), false);
   assert.equal(stats.has(ns), false);
+});
+
+void test('handleRequest destroy reports whether any namespace state existed', () => {
+  caches.clear();
+  stats.clear();
+  const missing = handleRequest({ id: 'd1', namespace: 'destroy-missing', source: SOURCE, op: 'destroy' });
+  assert.equal((missing as { value: unknown }).value, false);
+
+  stats.set('destroy-stats-only', {
+    namespace: 'destroy-stats-only',
+    hits: 0,
+    misses: 0,
+    sets: 0,
+    deletes: 0,
+    evictions: 0,
+    size: 0,
+  });
+  const statsOnly = handleRequest({ id: 'd2', namespace: 'destroy-stats-only', source: SOURCE, op: 'destroy' });
+  assert.equal((statsOnly as { value: unknown }).value, true);
+});
+
+void test('handleRequest fetchAbort returns false for missing or mismatched locks', () => {
+  caches.clear();
+  stats.clear();
+  const ns = 'abort-mismatch';
+  const d = (op: string, extra: object = {}) =>
+    handleRequest({ id: 'r', namespace: ns, source: SOURCE, cacheOptions: { max: 10 }, op, ...extra } as Request);
+
+  const missing = d('fetchAbort', { key: 'k', token: 'missing' });
+  assert.equal((missing as { value: unknown }).value, false);
+
+  const claim = (d('fetchClaim', { key: 'k' }) as { value: { kind: string; token?: string } }).value;
+  assert.equal(claim.kind, 'leader');
+  const mismatched = d('fetchAbort', { key: 'k', token: 'wrong' });
+  assert.equal((mismatched as { value: unknown }).value, false);
+  const matched = d('fetchAbort', { key: 'k', token: claim.token });
+  assert.equal((matched as { value: unknown }).value, true);
 });
 
 void test('handleRequest op=incr with ttl sets ttl only on first write', async () => {

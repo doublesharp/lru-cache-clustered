@@ -106,6 +106,45 @@ void test('sendToPrimary timeout with failsafe=reject rejects', async () => {
   await assert.rejects(p, /timeout/i);
 });
 
+void test('sendToPrimary rejects and cleans up when process.send throws', async () => {
+  const listeners: Array<(msg: unknown) => void> = [];
+  const client = createIpcClient({
+    send() {
+      throw new Error('channel closed');
+    },
+    on(_: 'message', cb: (msg: unknown) => void) {
+      listeners.push(cb);
+    },
+  });
+
+  await assert.rejects(
+    client.sendToPrimary({ namespace: 'n', timeout: 1000, failsafe: 'reject' }, { op: 'get', key: 'k' }),
+    /channel closed/,
+  );
+
+  assert.equal(listeners.length, 1);
+  assert.doesNotThrow(() => listeners[0]?.({ id: '1', source: SOURCE, ok: true, value: 'late' }));
+});
+
+void test('sendToPrimary wraps non-Error process.send throws', async () => {
+  const client = createIpcClient({
+    send() {
+      // eslint-disable-next-line @typescript-eslint/only-throw-error
+      throw 'channel closed';
+    },
+    on() {},
+  });
+
+  await assert.rejects(
+    client.sendToPrimary({ namespace: 'n', timeout: 1000, failsafe: 'reject' }, { op: 'get', key: 'k' }),
+    (err: unknown) => {
+      assert.ok(err instanceof Error);
+      assert.equal(err.message, 'channel closed');
+      return true;
+    },
+  );
+});
+
 void test('sendToPrimary ignores response with unknown id', async () => {
   const fake = makeFakeProcess();
   const client = createIpcClient({ send: fake.send.bind(fake), on: fake.on.bind(fake) });

@@ -14,7 +14,7 @@
 
 ## Features and infrastructure
 
-- Canonical package name is now `@0xdoublesharp/lru-cache-clustered`; `lru-cache-for-clusters-as-promised` is mirrored as a legacy alias during the migration window
+- Canonical package name is now `@0xdoublesharp/lru-cache-clustered`; `lru-cache-for-clusters-as-promised` is mirrored as a legacy alias from the same source
 - Repository moved to `github.com/doublesharp/lru-cache-clustered`
 - Dual ESM + CJS publish via `package.json` `exports`
 - Generic types: `LRUCacheForClustersAsPromised<K, V>`
@@ -32,7 +32,7 @@
 
 ## Migration
 
-See README "Migrating from v1.x" for the full mapping.
+See README "Migrating from older releases" for the full mapping.
 
 # 1.7.1 / 2021-03-25
 

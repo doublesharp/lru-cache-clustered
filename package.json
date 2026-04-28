@@ -35,7 +35,7 @@
   "packageManager": "pnpm@10.33.2",
   "scripts": {
     "build": "tsup && tsc -p tsconfig.build.json && cp dist/index.d.ts dist/index.d.cts",
-    "prepare:publish": "node scripts/prepare-publish.mjs",
+    "prepare:publish": "pnpm build && node scripts/prepare-publish.mjs",
     "example:users": "node --import tsx examples/clustered-users-server.ts",
     "example:rate-limit": "node --import tsx examples/clustered-rate-limit-server.ts",
     "example:sessions": "node --import tsx examples/clustered-session-server.ts",

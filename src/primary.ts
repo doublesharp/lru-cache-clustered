@@ -102,14 +102,10 @@ function readOptions(cache: AnyCache): SerializableLruOptions {
   };
 }
 
-function payloadCacheOptions(payload: ExecPayload): SerializableLruOptions | undefined {
-  return payload.op === 'init' ? payload.options : payload.cacheOptions;
-}
-
 function getCacheForPayload(namespace: string, payload: ExecPayload): AnyCache {
   const existing = caches.get(namespace);
   if (existing) return existing;
-  return getOrCreateCache(namespace, payloadCacheOptions(payload));
+  return getOrCreateCache(namespace, payload.cacheOptions);
 }
 
 function assertOptionsCompatible(namespace: string, cache: AnyCache, options?: SerializableLruOptions): void {
@@ -228,7 +224,7 @@ export function dispatchOp(namespace: string, payload: ExecPayload, context: Dis
       return { namespace, isNew, max: cache.max };
     }
     case 'healthCheck':
-      getCacheForPayload(namespace, payload);
+      getOrCreateCache(namespace, payload.cacheOptions);
       return undefined;
     case 'destroy': {
       const cacheExisted = caches.delete(namespace);

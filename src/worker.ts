@@ -60,7 +60,13 @@ export function createIpcClient(proc: ProcessLike): IpcClient {
         });
 
         messagesDebug('worker -> primary', request);
-        proc.send(request);
+        try {
+          proc.send(request);
+        } catch (error) {
+          clearTimeout(timer);
+          callbacks.delete(id);
+          reject(error instanceof Error ? error : new Error(String(error)));
+        }
       });
     },
   };

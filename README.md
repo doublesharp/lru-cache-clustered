@@ -5,7 +5,7 @@
 [![codecov](https://codecov.io/gh/doublesharp/lru-cache-clustered/branch/main/graph/badge.svg)](https://codecov.io/gh/doublesharp/lru-cache-clustered)
 [![Downloads](https://img.shields.io/npm/dt/%400xdoublesharp%2Flru-cache-clustered.svg)](https://www.npmjs.com/package/@0xdoublesharp/lru-cache-clustered)
 
-> `@0xdoublesharp/lru-cache-clustered` is the canonical package name. `lru-cache-for-clusters-as-promised` remains published as a mirrored legacy alias during the migration window.
+> `@0xdoublesharp/lru-cache-clustered` is the canonical package name. `lru-cache-for-clusters-as-promised` is published as a mirrored legacy alias from the same source.
 
 **One LRU cache, shared across every worker in your `node:cluster` app.** A typed Promise wrapper around [`lru-cache`](https://www.npmjs.com/package/lru-cache) that lives on the primary process and is reached from workers via IPC — so memory only gets paid once, not per worker. Outside `cluster`, it's a Promise interface to a plain in-process `lru-cache`.
 
@@ -29,7 +29,7 @@ pnpm add @0xdoublesharp/lru-cache-clustered lru-cache
 yarn add @0xdoublesharp/lru-cache-clustered lru-cache
 ```
 
-If you need to hold the legacy package name during migration, the same release line is also published as `lru-cache-for-clusters-as-promised`.
+If you need to keep the legacy package name, the same release line is also published as `lru-cache-for-clusters-as-promised`.
 
 ## Quick start
 
@@ -58,6 +58,8 @@ if (cluster.isPrimary) {
 > **Naming.** `LRUCacheClustered` is the short alias for `LRUCacheForClustersAsPromised`. The long name remains exported if you prefer the fully explicit class name.
 
 > **Startup ordering.** Import this package in the primary before `cluster.fork()`. The primary-side IPC listener is installed at module import time; if workers send cache requests before that import happens, they will time out. Call `LRUCacheClustered.bootstrap()` if you want that setup to be explicit in application code.
+
+> **Trust boundary.** This is a shared in-process coordination layer, not a security boundary. Any code running in a cluster worker can use any namespace it knows; don't expose namespaces or cache operations directly to untrusted callers.
 
 ## Examples
 
@@ -225,6 +227,8 @@ Both `memoize()` and `cache.fetch()` coordinate through the primary so concurren
 
 `forceRefresh` still bypasses the cached-value check and the current claim, so it intentionally starts a new leader fetch. Followers wait for a value to appear, then reuse it.
 
+The cache `timeout` option only bounds each worker IPC request. It does not cancel user fetcher work after a worker owns the primary-side single-flight lock, so production fetchers should enforce their own upstream timeout or abort policy.
+
 ## Errors
 
 **Worker mode.** When a primary-side handler throws, the worker's promise rejects with a reconstructed `Error` carrying the original `name`, `message`, `code`, `stack`, and `cause` chain. The rejected value is always a plain `Error` (subclass identity isn't crossed over IPC), but `.name`, `.code`, and `.cause` are intact, so logging and cause-chain walking work. Errors travel as `{ name, message, code?, stack?, cause? }` on the wire.
@@ -252,7 +256,7 @@ Common method and option mappings from older releases:
 
 `incr` / `decr` are kept; they remain the cleanest way to do race-safe counters across workers.
 
-The canonical package name is now `@0xdoublesharp/lru-cache-clustered`. The legacy unscoped package name continues to mirror releases during the migration window.
+The current package name is `@0xdoublesharp/lru-cache-clustered`. The legacy unscoped package name mirrors the same release line.
 
 ## Debugging
 

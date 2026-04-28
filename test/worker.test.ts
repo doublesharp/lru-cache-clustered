@@ -9,13 +9,20 @@ function makeFakeProcess() {
   return {
     sent,
     listeners,
-    send(msg: unknown) { sent.push(msg); return true; },
-    on(_: 'message', cb: (msg: unknown) => void) { listeners.push(cb); },
-    deliver(msg: Response) { for (const l of listeners) l(msg); },
+    send(msg: unknown) {
+      sent.push(msg);
+      return true;
+    },
+    on(_: 'message', cb: (msg: unknown) => void) {
+      listeners.push(cb);
+    },
+    deliver(msg: Response) {
+      for (const l of listeners) l(msg);
+    },
   };
 }
 
-test('sendToPrimary resolves with value on matching response', async () => {
+void test('sendToPrimary resolves with value on matching response', async () => {
   const fake = makeFakeProcess();
   const client = createIpcClient({ send: fake.send.bind(fake), on: fake.on.bind(fake) });
   const p = client.sendToPrimary({ namespace: 'n', timeout: 1000, failsafe: 'resolve' }, { op: 'get', key: 'k' });
@@ -25,7 +32,7 @@ test('sendToPrimary resolves with value on matching response', async () => {
   assert.equal(await p, 'hello');
 });
 
-test('sendToPrimary rejects on ok=false', async () => {
+void test('sendToPrimary rejects on ok=false', async () => {
   const fake = makeFakeProcess();
   const client = createIpcClient({ send: fake.send.bind(fake), on: fake.on.bind(fake) });
   const p = client.sendToPrimary({ namespace: 'n', timeout: 1000, failsafe: 'resolve' }, { op: 'get', key: 'k' });
@@ -34,7 +41,7 @@ test('sendToPrimary rejects on ok=false', async () => {
   await assert.rejects(p, /boom/);
 });
 
-test('sendToPrimary ignores responses with foreign source', async () => {
+void test('sendToPrimary ignores responses with foreign source', async () => {
   const fake = makeFakeProcess();
   const client = createIpcClient({ send: fake.send.bind(fake), on: fake.on.bind(fake) });
   const p = client.sendToPrimary({ namespace: 'n', timeout: 50, failsafe: 'resolve' }, { op: 'get', key: 'k' });
@@ -44,14 +51,14 @@ test('sendToPrimary ignores responses with foreign source', async () => {
   assert.equal(await p, undefined);
 });
 
-test('sendToPrimary timeout with failsafe=resolve resolves undefined', async () => {
+void test('sendToPrimary timeout with failsafe=resolve resolves undefined', async () => {
   const fake = makeFakeProcess();
   const client = createIpcClient({ send: fake.send.bind(fake), on: fake.on.bind(fake) });
   const p = client.sendToPrimary({ namespace: 'n', timeout: 25, failsafe: 'resolve' }, { op: 'get', key: 'k' });
   assert.equal(await p, undefined);
 });
 
-test('sendToPrimary timeout with failsafe=reject rejects', async () => {
+void test('sendToPrimary timeout with failsafe=reject rejects', async () => {
   const fake = makeFakeProcess();
   const client = createIpcClient({ send: fake.send.bind(fake), on: fake.on.bind(fake) });
   const p = client.sendToPrimary({ namespace: 'n', timeout: 25, failsafe: 'reject' }, { op: 'get', key: 'k' });

@@ -250,6 +250,11 @@ export class LRUCacheForClustersAsPromised<K = string, V = unknown> {
   }
 }
 
+// Short alias — equivalent to `LRUCacheForClustersAsPromised`, kept for
+// ergonomic imports. The long name remains the canonical export so v1.x
+// users find a familiar identifier.
+export { LRUCacheForClustersAsPromised as ClusterCache };
+
 export { memoize, type MemoizeOptions } from './memoize.js';
 export { wrap, type Codec, type WrappedCache } from './codec.js';
 

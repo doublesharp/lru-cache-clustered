@@ -32,9 +32,9 @@ yarn add lru-cache-for-clusters-as-promised lru-cache
 ```ts
 import cluster from 'node:cluster';
 import { availableParallelism } from 'node:os';
-import { LRUCacheForClustersAsPromised } from 'lru-cache-for-clusters-as-promised';
+import { ClusterCache } from 'lru-cache-for-clusters-as-promised';
 
-const cache = new LRUCacheForClustersAsPromised<string, string>({
+const cache = new ClusterCache<string, string>({
   namespace: 'sessions',
   max: 1000,
   ttl: 60_000,
@@ -48,6 +48,8 @@ if (cluster.isPrimary) {
   // {"name":"ada"} — every worker sees the same value
 }
 ```
+
+> **Naming.** `ClusterCache` is a short alias for `LRUCacheForClustersAsPromised`. Both refer to the same class — use whichever reads better in your code. The long name remains the canonical export for v1.x continuity.
 
 ## How it works
 
@@ -85,10 +87,10 @@ All `LRUCache` constructor options from [`lru-cache@11`](https://github.com/isaa
 
 ### Static
 
-| Method                                               | Description                                                                                                       |
-| ---------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| `LRUCacheForClustersAsPromised.getInstance(options)` | Async factory. In a worker, awaits the init message so the primary has registered the namespace before returning. |
-| `LRUCacheForClustersAsPromised.getAllCaches()`       | Returns the `Map<namespace, LRUCache>` registry. **Primary only** — throws in workers.                            |
+| Method                              | Description                                                                                                       |
+| ----------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `ClusterCache.getInstance(options)` | Async factory. In a worker, awaits the init message so the primary has registered the namespace before returning. |
+| `ClusterCache.getAllCaches()`       | Returns the `Map<namespace, LRUCache>` registry. **Primary only** — throws in workers.                            |
 
 ### Core
 
@@ -149,9 +151,9 @@ All `LRUCache` constructor options from [`lru-cache@11`](https://github.com/isaa
 
 ```ts
 import { gzipSync, gunzipSync } from 'node:zlib';
-import { LRUCacheForClustersAsPromised, wrap } from 'lru-cache-for-clusters-as-promised';
+import { ClusterCache, wrap } from 'lru-cache-for-clusters-as-promised';
 
-const inner = new LRUCacheForClustersAsPromised<string, Buffer>({ namespace: 'big-blobs', max: 1000 });
+const inner = new ClusterCache<string, Buffer>({ namespace: 'big-blobs', max: 1000 });
 
 const cache = wrap(inner, {
   encode: (v: unknown) => gzipSync(Buffer.from(JSON.stringify(v), 'utf8')),
@@ -171,9 +173,9 @@ await cache.get('user:42'); // decoded back to { id: 42, name: 'ada' }
 Cache-aside in one line. Concurrent calls for the same key dedupe to a single underlying invocation _within the same worker_.
 
 ```ts
-import { LRUCacheForClustersAsPromised, memoize } from 'lru-cache-for-clusters-as-promised';
+import { ClusterCache, memoize } from 'lru-cache-for-clusters-as-promised';
 
-const cache = new LRUCacheForClustersAsPromised<string, User>({ namespace: 'users', ttl: 60_000 });
+const cache = new ClusterCache<string, User>({ namespace: 'users', ttl: 60_000 });
 
 const getUser = memoize(
   cache,

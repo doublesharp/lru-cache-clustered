@@ -17,6 +17,10 @@
 - Dual ESM + CJS publish via `package.json` `exports`
 - Generic types: `LRUCacheForClustersAsPromised<K, V>`
 - Node `>=22` required
+- Added `destroy()` to tear down namespace caches, stats, and fetch coordination state on the primary
+- Added explicit startup controls via `LRUCacheClustered.bootstrap()` and `cache.healthCheck()`
+- Added size-bounded cache support (`maxSize`, `maxEntrySize`, and `size` on write paths)
+- `fetch()` now uses primary-side single-flight coordination across workers; `memoize()` delegates to it
 - Dropped runtime deps: `cron`, `uuid` — request IDs use a per-process monotonic counter
 - pnpm for development; node:test + c8 for tests/coverage; tsup + tsc for build
 - 100% line/statement/function coverage

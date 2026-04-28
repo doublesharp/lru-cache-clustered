@@ -27,7 +27,7 @@
     "build": "tsup",
     "test": "node --import tsx --test test/*.test.ts",
     "test:coverage": "c8 --reporter=text --reporter=lcov --include='src/**/*.ts' pnpm test",
-    "lint": "eslint src test",
+    "lint": "eslint --no-error-on-unmatched-pattern src test",
     "format": "prettier --write src test",
     "typecheck": "tsc --noEmit",
     "prepublishOnly": "pnpm build && pnpm test && pnpm lint && pnpm typecheck"

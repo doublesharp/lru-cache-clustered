@@ -3,7 +3,14 @@ import { randomUUID } from 'node:crypto';
 import { LRUCache } from 'lru-cache';
 import { caches, getOrCreateCache, handleRequest, installClusterListener } from './primary.js';
 import { defaultClient, type IpcClient, type RequestPayload } from './worker.js';
-import { SOURCE, type Request, type Response, type SerializableLruOptions } from './messages.js';
+import {
+  SOURCE,
+  deserializeError,
+  type Request,
+  type Response,
+  type SerializableLruOptions,
+  type Stats,
+} from './messages.js';
 
 if (cluster.isPrimary) installClusterListener();
 
@@ -26,8 +33,12 @@ export class LRUCacheForClustersAsPromised<K = string, V = unknown> {
   readonly namespace: string;
   readonly timeout: number;
   readonly failsafe: 'resolve' | 'reject';
+  readonly ready: Promise<void>;
   readonly #lruOptions: SerializableLruOptions;
   readonly #client: IpcClient;
+  // Worker-local in-flight dedup for fetch(); concurrent fetches in *different*
+  // workers may both invoke the fetcher since this map is not shared.
+  readonly #inFlight = new Map<K, Promise<V>>();
 
   constructor(options: LRUCacheClusterOptions & InternalOptions = {}) {
     this.namespace = options.namespace ?? 'default';
@@ -43,8 +54,16 @@ export class LRUCacheForClustersAsPromised<K = string, V = unknown> {
 
     if (cluster.isPrimary) {
       getOrCreateCache(this.namespace, this.#lruOptions);
+      this.ready = Promise.resolve(undefined);
     } else if (!options.noInit) {
-      void this.#dispatch<unknown>({ op: 'init', options: this.#lruOptions });
+      // Swallow rejection so consumers can `await cache.ready` purely for
+      // ordering without unhandled-rejection noise.
+      this.ready = this.#dispatch<unknown>({ op: 'init', options: this.#lruOptions }).then(
+        () => undefined,
+        () => undefined,
+      );
+    } else {
+      this.ready = Promise.resolve(undefined);
     }
   }
 
@@ -140,11 +159,11 @@ export class LRUCacheForClustersAsPromised<K = string, V = unknown> {
     return this.#dispatch<number>({ op: 'size' });
   }
 
-  incr(key: K, amount?: number) {
-    return this.#dispatch<number>({ op: 'incr', key, amount });
+  incr(key: K, amount?: number, opts?: { ttl?: number }) {
+    return this.#dispatch<number>({ op: 'incr', key, amount, ttl: opts?.ttl });
   }
-  decr(key: K, amount?: number) {
-    return this.#dispatch<number>({ op: 'decr', key, amount });
+  decr(key: K, amount?: number, opts?: { ttl?: number }) {
+    return this.#dispatch<number>({ op: 'decr', key, amount, ttl: opts?.ttl });
   }
 
   allowStale(value?: boolean) {
@@ -157,6 +176,58 @@ export class LRUCacheForClustersAsPromised<K = string, V = unknown> {
     return this.#dispatch<number>({ op: 'ttl', value });
   }
 
+  getRemainingTTL(key: K) {
+    return this.#dispatch<number>({ op: 'getRemainingTTL', key });
+  }
+  setIfAbsent(key: K, value: V, opts?: { ttl?: number }) {
+    return this.#dispatch<boolean>({
+      op: 'setIfAbsent',
+      key,
+      value,
+      ttl: opts?.ttl,
+    });
+  }
+  load(entries: Array<[K, LRUCache.Entry<V>]>) {
+    return this.#dispatch<void>({
+      op: 'load',
+      entries: entries,
+    });
+  }
+  stats() {
+    return this.#dispatch<Stats>({ op: 'stats' });
+  }
+
+  // Materializes the full entries array up front, then yields — simpler than
+  // streaming over IPC at the cost of a single large payload per iteration.
+  async *[Symbol.asyncIterator](): AsyncIterableIterator<[K, V]> {
+    const all = await this.entries();
+    for (const pair of all) yield pair;
+  }
+
+  async fetch(
+    key: K,
+    fetcher: (key: K) => Promise<V> | V,
+    opts?: { ttl?: number; forceRefresh?: boolean },
+  ): Promise<V> {
+    if (!opts?.forceRefresh) {
+      const cached = await this.get(key);
+      if (cached !== undefined) return cached;
+    }
+    const existing = this.#inFlight.get(key);
+    if (existing) return existing;
+    const p = (async () => {
+      try {
+        const v = await fetcher(key);
+        await this.set(key, v, { ttl: opts?.ttl });
+        return v;
+      } finally {
+        this.#inFlight.delete(key);
+      }
+    })();
+    this.#inFlight.set(key, p);
+    return p;
+  }
+
   #dispatch<T>(payload: RequestPayload): Promise<T> {
     if (cluster.isPrimary) {
       const req: Request = {
@@ -167,7 +238,7 @@ export class LRUCacheForClustersAsPromised<K = string, V = unknown> {
       };
       const res: Response = handleRequest(req);
       if (res.ok) return Promise.resolve(res.value as T);
-      return Promise.reject(new Error(res.error));
+      return Promise.reject(deserializeError(res.error));
     }
     return this.#client.sendToPrimary<T>(
       {
@@ -179,5 +250,7 @@ export class LRUCacheForClustersAsPromised<K = string, V = unknown> {
     );
   }
 }
+
+export { memoize, type MemoizeOptions } from './memoize.js';
 
 export default LRUCacheForClustersAsPromised;

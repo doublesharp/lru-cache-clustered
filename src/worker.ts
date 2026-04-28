@@ -1,9 +1,13 @@
-import { randomUUID } from 'node:crypto';
 import { setTimeout, clearTimeout } from 'node:timers';
 import Debug from 'debug';
 import { SOURCE, deserializeError, type Request, type Response } from './messages.js';
 
 const messagesDebug = Debug(`${SOURCE}-messages`);
+
+// Monotonic per-process request ID. Each IpcClient gets its own counter via
+// closure, so client instances never collide. Avoids randomUUID's ~1µs cost
+// and keeps wire-format IDs short (1-10 chars vs UUID's 36).
+let nextRequestId = 0;
 
 type SendOptions = {
   namespace: string;
@@ -37,7 +41,7 @@ export function createIpcClient(proc: ProcessLike): IpcClient {
 
   return {
     sendToPrimary<T>(opts: SendOptions, payload: RequestPayload): Promise<T> {
-      const id = randomUUID();
+      const id = String(++nextRequestId);
       const request = { id, namespace: opts.namespace, source: SOURCE, ...payload } as Request;
 
       return new Promise<T>((resolve, reject) => {

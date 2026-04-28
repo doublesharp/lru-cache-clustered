@@ -64,3 +64,12 @@ void test('sendToPrimary timeout with failsafe=reject rejects', async () => {
   const p = client.sendToPrimary({ namespace: 'n', timeout: 25, failsafe: 'reject' }, { op: 'get', key: 'k' });
   await assert.rejects(p, /timeout/i);
 });
+
+void test('sendToPrimary ignores response with unknown id', async () => {
+  const fake = makeFakeProcess();
+  const client = createIpcClient({ send: fake.send.bind(fake), on: fake.on.bind(fake) });
+  const p = client.sendToPrimary({ namespace: 'n', timeout: 25, failsafe: 'resolve' }, { op: 'get', key: 'k' });
+  // Deliver a response with the wrong id; sendToPrimary should ignore it and time out.
+  fake.deliver({ id: 'unknown-id', source: SOURCE, ok: true, value: 'ignored' });
+  assert.equal(await p, undefined);
+});

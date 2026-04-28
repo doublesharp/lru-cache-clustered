@@ -1,23 +1,9 @@
 import cluster from 'node:cluster';
 import { randomUUID } from 'node:crypto';
 import { LRUCache } from 'lru-cache';
-import {
-  caches,
-  getOrCreateCache,
-  handleRequest,
-  installClusterListener,
-} from './primary.js';
-import {
-  defaultClient,
-  type IpcClient,
-  type RequestPayload,
-} from './worker.js';
-import {
-  SOURCE,
-  type Request,
-  type Response,
-  type SerializableLruOptions,
-} from './messages.js';
+import { caches, getOrCreateCache, handleRequest, installClusterListener } from './primary.js';
+import { defaultClient, type IpcClient, type RequestPayload } from './worker.js';
+import { SOURCE, type Request, type Response, type SerializableLruOptions } from './messages.js';
 
 if (cluster.isPrimary) installClusterListener();
 
@@ -47,13 +33,7 @@ export class LRUCacheForClustersAsPromised<K = string, V = unknown> {
     this.namespace = options.namespace ?? 'default';
     this.timeout = options.timeout ?? 100;
     this.failsafe = options.failsafe === 'reject' ? 'reject' : 'resolve';
-    const {
-      namespace: _n,
-      timeout: _t,
-      failsafe: _f,
-      noInit: _ni,
-      ...lruOpts
-    } = options;
+    const { namespace: _n, timeout: _t, failsafe: _f, noInit: _ni, ...lruOpts } = options;
     void _n;
     void _t;
     void _f;
@@ -86,18 +66,14 @@ export class LRUCacheForClustersAsPromised<K = string, V = unknown> {
 
   static getAllCaches(): Map<string, LRUCache<NonNullish, NonNullish>> {
     if (cluster.isWorker) {
-      throw new Error(
-        'LRUCacheForClustersAsPromised.getAllCaches() must not be called from a worker',
-      );
+      throw new Error('LRUCacheForClustersAsPromised.getAllCaches() must not be called from a worker');
     }
     return caches;
   }
 
   getCache(): LRUCache<NonNullish, NonNullish> | undefined {
     if (cluster.isWorker) {
-      throw new Error(
-        'LRUCacheForClustersAsPromised.getCache() must not be called from a worker',
-      );
+      throw new Error('LRUCacheForClustersAsPromised.getCache() must not be called from a worker');
     }
     return caches.get(this.namespace);
   }
@@ -133,7 +109,7 @@ export class LRUCacheForClustersAsPromised<K = string, V = unknown> {
   async mGet(keys: K[]): Promise<Map<K, V | undefined>> {
     const pairs = await this.#dispatch<Array<[K, V | undefined]>>({
       op: 'mGet',
-      keys: keys as unknown[],
+      keys: keys,
     });
     return new Map(pairs);
   }
@@ -145,7 +121,7 @@ export class LRUCacheForClustersAsPromised<K = string, V = unknown> {
     });
   }
   mDelete(keys: K[]) {
-    return this.#dispatch<void>({ op: 'mDelete', keys: keys as unknown[] });
+    return this.#dispatch<void>({ op: 'mDelete', keys: keys });
   }
 
   keys() {
@@ -188,7 +164,7 @@ export class LRUCacheForClustersAsPromised<K = string, V = unknown> {
         namespace: this.namespace,
         source: SOURCE,
         ...payload,
-      } as Request;
+      };
       const res: Response = handleRequest(req);
       if (res.ok) return Promise.resolve(res.value as T);
       return Promise.reject(new Error(res.error));

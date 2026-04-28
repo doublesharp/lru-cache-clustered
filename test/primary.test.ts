@@ -163,3 +163,36 @@ void test('handleRequest returns error for unknown op', () => {
   assert.equal(r.ok, false);
   assert.match((r as { error: string }).error, /unhandled op/);
 });
+
+void test('handleRequest catches handler exceptions and returns ok=false', () => {
+  caches.clear();
+  // Pre-create a cache and break one of its methods to force a throw inside the switch.
+  handleRequest({ id: 'i', namespace: 'boom', source: SOURCE, op: 'init', options: { max: 5 } });
+  const cache = caches.get('boom');
+  assert.ok(cache);
+  (cache as { get: (k: unknown) => unknown }).get = () => {
+    throw new Error('boom-message');
+  };
+  const r = handleRequest({ id: 'r', namespace: 'boom', source: SOURCE, op: 'get', key: 'x' });
+  assert.equal(r.ok, false);
+  assert.match((r as { error: string }).error, /boom-message/);
+});
+
+void test('handleRequest max setter rebuilds the cache, preserving entries', () => {
+  caches.clear();
+  const ns = 'rebuild';
+  const d = (op: string, extra: object = {}) =>
+    handleRequest({ id: 'r', namespace: ns, source: SOURCE, op, ...extra } as Request);
+
+  d('init', { options: { max: 10, ttl: 1000, allowStale: true } });
+  d('set', { key: 'a', value: 1 });
+  d('set', { key: 'b', value: 2 });
+
+  // Change max — primary rebuilds the underlying cache while preserving entries.
+  assert.equal((d('max', { value: 50 }) as { value: unknown }).value, 50);
+  assert.equal((d('get', { key: 'a' }) as { value: unknown }).value, 1);
+  assert.equal((d('get', { key: 'b' }) as { value: unknown }).value, 2);
+  // Tunables preserved.
+  assert.equal((d('ttl') as { value: unknown }).value, 1000);
+  assert.equal((d('allowStale') as { value: unknown }).value, true);
+});

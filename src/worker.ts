@@ -69,8 +69,9 @@ function isOurResponse(value: unknown): value is Response {
   );
 }
 
-// Default singleton for the actual worker process (real `process` object)
+// Default singleton for the actual worker process (real `process` object).
+// Caller is expected to be a cluster worker, so process.send is defined.
 export const defaultClient: IpcClient = createIpcClient({
-  send: (msg) => process.send?.(msg) ?? false,
+  send: (msg) => process.send!(msg),
   on: (event, cb) => process.on(event, cb),
 });

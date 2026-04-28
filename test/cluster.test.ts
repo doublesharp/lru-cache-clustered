@@ -22,6 +22,8 @@ void test('cluster.fork roundtrip: worker can use IPC cache', { timeout: 15_000 
     v1: string;
     got: Array<[string, string | undefined]>;
     counter: number;
+    getAllCachesThrew: boolean;
+    getCacheThrew: boolean;
   }>((resolve, reject) => {
     const worker = cluster.fork();
     const timer = setTimer(() => {
@@ -31,7 +33,7 @@ void test('cluster.fork roundtrip: worker can use IPC cache', { timeout: 15_000 
     worker.on('message', (msg: { kind?: string; payload?: unknown }) => {
       if (msg && msg.kind === 'integration-results') {
         clearTimer(timer);
-        worker.kill();
+        // Don't kill — let the worker exit cleanly so V8 coverage flushes.
         resolve(msg.payload as never);
       }
     });
@@ -54,4 +56,6 @@ void test('cluster.fork roundtrip: worker can use IPC cache', { timeout: 15_000 
     ['missing', undefined],
   ]);
   assert.equal(result.counter, 3);
+  assert.equal(result.getAllCachesThrew, true);
+  assert.equal(result.getCacheThrew, true);
 });

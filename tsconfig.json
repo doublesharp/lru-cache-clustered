@@ -23,6 +23,6 @@
     "noEmit": true,
     "types": ["node"]
   },
-  "include": ["src/**/*", "test/**/*", "tsup.config.ts"],
+  "include": ["src/**/*", "test/**/*", "examples/**/*", "tsup.config.ts"],
   "exclude": ["node_modules", "dist"]
 }

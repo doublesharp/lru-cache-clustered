@@ -1,7 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { caches, handleRequest } from '../src/primary.ts';
+import { caches, handleRequest, stats } from '../src/primary.ts';
 import { SOURCE, type Request } from '../src/messages.ts';
+
+// Each iteration generates a fresh namespace; without clearing the full
+// registry the caches/stats Maps accumulate ~NUM_RUNS entries per test (and
+// across the 8 tests in this file). That accumulation reproducibly OOMs V8's
+// internal NumberDictionary on long runs. Resetting per iteration matches the
+// pattern in ipc.fuzz.test.ts.
+function resetState() {
+  caches.clear();
+  stats.clear();
+}
 
 const NUM_RUNS = Number(process.env.FUZZ_RUNS ?? 200);
 
@@ -65,7 +75,7 @@ void test('property: cache.size never exceeds cap', () => {
     const cap = randInt(1, 50);
     const entries = randEntries(200);
     const ns = `prop-cap-${cap}-${i}`;
-    caches.delete(ns);
+    resetState();
     dispatch(ns, 'init', { options: { max: cap } });
     for (const [k, v] of entries) dispatch(ns, 'set', { key: k, value: v });
     const size = (dispatch(ns, 'size') as { value: number }).value;
@@ -79,7 +89,7 @@ void test('property: set then immediate get returns same value (within cap)', ()
     const value = randValue();
     const cap = randInt(1, 100);
     const ns = `prop-rt-${cap}-${i}`;
-    caches.delete(ns);
+    resetState();
     dispatch(ns, 'init', { options: { max: cap } });
     dispatch(ns, 'set', { key, value });
     const got = (dispatch(ns, 'get', { key }) as { value: unknown }).value;
@@ -92,7 +102,7 @@ void test('property: has(k) iff get(k) defined (no undefined values stored)', ()
     const entries = randEntries(50);
     if (entries.length === 0) continue;
     const ns = `prop-has-${i}`;
-    caches.delete(ns);
+    resetState();
     dispatch(ns, 'init', { options: { max: 100 } });
     for (const [k, v] of entries) dispatch(ns, 'set', { key: k, value: v });
     for (const [k] of entries) {
@@ -107,7 +117,7 @@ void test('property: clear empties the cache', () => {
   for (let i = 0; i < NUM_RUNS; i++) {
     const entries = randEntries(100);
     const ns = `prop-clear-${i}`;
-    caches.delete(ns);
+    resetState();
     dispatch(ns, 'init', { options: { max: 200 } });
     for (const [k, v] of entries) dispatch(ns, 'set', { key: k, value: v });
     dispatch(ns, 'clear');
@@ -124,7 +134,7 @@ void test('property: mGet equivalent to map(get)', () => {
     for (let j = 0; j < queryLen; j++) queryKeys.push(randKey());
 
     const ns = `prop-mget-${i}`;
-    caches.delete(ns);
+    resetState();
     dispatch(ns, 'init', { options: { max: 200 } });
     for (const [k, v] of seed) dispatch(ns, 'set', { key: k, value: v });
 
@@ -144,7 +154,7 @@ void test('property: mDelete removes all listed keys', () => {
     const entries = randEntries(50);
     if (entries.length === 0) continue;
     const ns = `prop-mdel-${i}`;
-    caches.delete(ns);
+    resetState();
     dispatch(ns, 'init', { options: { max: 200 } });
     for (const [k, v] of entries) dispatch(ns, 'set', { key: k, value: v });
     const keys = entries.map(([k]) => k);
@@ -164,7 +174,7 @@ void test('property: incr/decr arithmetic round-trip', () => {
     for (let j = 0; j < len; j++) deltas.push(randInt(-1000, 1000));
 
     const ns = `prop-incr-${i}`;
-    caches.delete(ns);
+    resetState();
     dispatch(ns, 'init', { options: { max: 10 } });
     let expected = 0;
     for (const d of deltas) {
@@ -184,7 +194,7 @@ void test('property: max(newCap) shrinks size to <= newCap', () => {
     if (entries.length < 5) continue;
 
     const ns = `prop-max-${initialCap}-${newCap}-${i}`;
-    caches.delete(ns);
+    resetState();
     dispatch(ns, 'init', { options: { max: initialCap } });
     for (const [k, v] of entries) dispatch(ns, 'set', { key: k, value: v });
     dispatch(ns, 'max', { value: newCap });

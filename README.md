@@ -5,27 +5,29 @@
 [![codecov](https://codecov.io/gh/doublesharp/lru-cache-for-clusters-as-promised/branch/main/graph/badge.svg)](https://codecov.io/gh/doublesharp/lru-cache-for-clusters-as-promised)
 [![Downloads](https://img.shields.io/npm/dt/lru-cache-for-clusters-as-promised.svg)](https://www.npmjs.com/package/lru-cache-for-clusters-as-promised)
 
-A cluster-safe Promise wrapper around [`lru-cache`](https://www.npmjs.com/package/lru-cache). Workers in a [`node:cluster`](https://nodejs.org/api/cluster.html) share a single cache that lives on the primary process, communicating via IPC. Outside cluster mode, it's a Promise interface to a plain in-process `lru-cache`.
+**One LRU cache, shared across every worker in your `node:cluster` app.** A typed Promise wrapper around [`lru-cache`](https://www.npmjs.com/package/lru-cache) that lives on the primary process and is reached from workers via IPC — so memory only gets paid once, not per worker. Outside `cluster`, it's a Promise interface to a plain in-process `lru-cache`.
 
-> **v2.0 — TypeScript rewrite, breaking changes.** v2 targets Node ≥22, ships dual ESM + CJS, and adopts the `lru-cache@11` API surface. v1 consumers should pin to `^1.7.4` until they migrate. See **[Migrating from v1.x](#migrating-from-v1x)** below.
+- **One copy in memory** — workers don't each duplicate the cache
+- **Race-safe counters** — `incr` / `decr` are atomic on the primary, safe across N workers
+- **Cache-aside in one line** — `fetch()` and `memoize()` dedupe concurrent calls per worker
+- **Codec wrappers** — transparent gzip / MessagePack / custom encode-decode via `wrap()`
+- **Per-namespace stats** — hits, misses, sets, deletes, evictions, size
+- **TTL with rate-limiter semantics** — `incr` keeps the original expiration ticking
+- **Modern** — TypeScript, dual ESM + CJS, Node ≥22, 100% test coverage, structured error transport
+
+> **v2 is a breaking rewrite.** Node ≥22, dual ESM + CJS, `lru-cache@11`-shaped API. v1 users should pin to `^1.7.4` until they migrate — see [Migrating from v1.x](#migrating-from-v1x).
 
 ## Install
 
-`lru-cache@11` is a peer dependency — install it alongside this package so you control the version.
+`lru-cache@11` is a peer dependency. Install it alongside this package so you control the version.
 
 ```sh
 npm install lru-cache-for-clusters-as-promised lru-cache
-```
-
-```sh
 pnpm add lru-cache-for-clusters-as-promised lru-cache
-```
-
-```sh
 yarn add lru-cache-for-clusters-as-promised lru-cache
 ```
 
-## Usage
+## Quick start
 
 ```ts
 import cluster from 'node:cluster';
@@ -42,29 +44,34 @@ if (cluster.isPrimary) {
   for (let i = 0; i < availableParallelism(); i++) cluster.fork();
 } else {
   await cache.set('user:42', JSON.stringify({ name: 'ada' }));
-  const v = await cache.get('user:42');
-  console.log(v); // {"name":"ada"}
+  console.log(await cache.get('user:42'));
+  // {"name":"ada"} — every worker sees the same value
 }
 ```
 
 ## How it works
 
-When you create a `LRUCacheForClustersAsPromised` instance, it branches at construction:
+```
+┌─────────────────────────────────────────────────────────────┐
+│  primary process                                            │
+│    caches: Map<namespace, LRUCache>                         │
+└──────────▲──────────────────▲──────────────────▲────────────┘
+           │ IPC              │ IPC              │ IPC
+       ┌───┴────┐         ┌───┴────┐         ┌───┴────┐
+       │worker 1│         │worker 2│   ···   │worker N│
+       └────────┘         └────────┘         └────────┘
+```
 
-- **In the primary process** (`cluster.isPrimary === true`), the instance owns a real `LRUCache` registered under its `namespace`. Methods operate on it directly — no IPC.
-- **In a worker process**, the instance sends an IPC request to the primary for every operation, awaits the matching response, and resolves your promise.
+`new LRUCacheForClustersAsPromised(...)` branches at construction:
 
-Multiple instances in different workers that share a `namespace` operate on the same primary-side cache. This is the savings: only one copy of the data lives in memory.
+- **In the primary** (`cluster.isPrimary === true`), the instance owns and directly operates on the in-process `LRUCache` for its namespace — no IPC, no allocation per call.
+- **In a worker**, every operation becomes a typed IPC request to the primary; the returned Promise resolves with the response.
 
-## Errors
-
-In **worker mode**, when a primary-side handler throws, the worker's promise rejects with a reconstructed `Error` that preserves the original `name`, `message`, `code`, `stack`, and `cause` chain — not just the message. The reconstructed value is always a plain `Error` (subclass identity isn't crossed over IPC), but `err.name`, `err.code`, and `err.cause` are intact, so logging and cause-chain walking work. Errors are serialized as `{ name, message, code?, stack?, cause? }` on the wire.
-
-In **primary mode** there is no IPC: a thrown `Error` is rejected as-is (preserving subclass identity); a thrown non-Error value is wrapped in `new Error(String(value))`. For `Error` throws the two modes are observably equivalent.
+Instances in different workers that share a `namespace` operate on the same primary-side cache. That's where the memory savings come from.
 
 ## Options
 
-All `LRUCache` constructor options from [`lru-cache@11`](https://github.com/isaacs/node-lru-cache) are passed through (`max`, `ttl`, `allowStale`, `updateAgeOnGet`, etc.). Plus:
+All `LRUCache` constructor options from [`lru-cache@11`](https://github.com/isaacs/node-lru-cache) pass through (`max`, `ttl`, `allowStale`, `updateAgeOnGet`, …). Plus:
 
 | Option      | Type                    | Default     | Description                                                                                                   |
 | ----------- | ----------------------- | ----------- | ------------------------------------------------------------------------------------------------------------- |
@@ -72,53 +79,73 @@ All `LRUCache` constructor options from [`lru-cache@11`](https://github.com/isaa
 | `timeout`   | `number`                | `100`       | Worker IPC timeout in ms.                                                                                     |
 | `failsafe`  | `'resolve' \| 'reject'` | `'resolve'` | On worker IPC timeout: `'resolve'` resolves with `undefined`; `'reject'` rejects with `Error('IPC timeout')`. |
 
-> **`failsafe: 'resolve'` caveat.** `'resolve'` returns `undefined` on timeout for _every_ op, regardless of the declared return type. For `get`/`peek` that's the natural value. For `has` (declared `Promise<boolean>`) you'll get a falsy `undefined`; for `set`/`delete`/`incr`/`decr`/`size` (declared non-undefined) callers that destructure or arithmetic on the result will misbehave (`undefined + 1 === NaN`). Use `'reject'` if you need typed-shape correctness on timeout.
+> **`failsafe: 'resolve'` caveat.** On timeout, `'resolve'` returns `undefined` for _every_ op, regardless of declared return type. For `get` / `peek` that's natural; for `has` / `set` / `delete` / `incr` / `decr` / `size` it can surprise callers (`undefined + 1 === NaN`). Use `'reject'` if typed-shape correctness on timeout matters.
 
 ## API
 
 ### Static
 
-| Method                                               | Description                                                                                                                                       |
-| ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `LRUCacheForClustersAsPromised.getInstance(options)` | Async factory. In a worker, awaits the init message so the primary has registered the namespace before returning. Use this when ordering matters. |
-| `LRUCacheForClustersAsPromised.getAllCaches()`       | Returns the `Map<namespace, LRUCache>` registry. **Primary only** — throws in workers.                                                            |
+| Method                                               | Description                                                                                                       |
+| ---------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `LRUCacheForClustersAsPromised.getInstance(options)` | Async factory. In a worker, awaits the init message so the primary has registered the namespace before returning. |
+| `LRUCacheForClustersAsPromised.getAllCaches()`       | Returns the `Map<namespace, LRUCache>` registry. **Primary only** — throws in workers.                            |
 
-### Instance
+### Core
 
-| Method                                        | Returns                           | Notes                                                                                                                                          |
-| --------------------------------------------- | --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| `getCache()`                                  | `LRUCache \| undefined`           | Underlying `lru-cache` for this namespace. **Primary only**.                                                                                   |
-| `get(key)`                                    | `Promise<V \| undefined>`         |                                                                                                                                                |
-| `set(key, value, { ttl? })`                   | `Promise<boolean>`                |                                                                                                                                                |
-| `setIfAbsent(key, value, { ttl? })`           | `Promise<boolean>`                | Atomic on the primary. `false` if the key already exists.                                                                                      |
-| `delete(key)`                                 | `Promise<boolean>`                |                                                                                                                                                |
-| `has(key)`                                    | `Promise<boolean>`                |                                                                                                                                                |
-| `peek(key)`                                   | `Promise<V \| undefined>`         | Doesn't update LRU position.                                                                                                                   |
-| `getRemainingTTL(key)`                        | `Promise<number>`                 | Milliseconds until expiry. `Infinity` for keys with no TTL (matches `lru-cache@11`); `0` for missing keys.                                     |
-| `clear()`                                     | `Promise<void>`                   |                                                                                                                                                |
-| `purgeStale()`                                | `Promise<boolean>`                | Removes expired entries.                                                                                                                       |
-| `mGet(keys)`                                  | `Promise<Map<K, V \| undefined>>` |                                                                                                                                                |
-| `mSet(entries, { ttl? })`                     | `Promise<void>`                   | `entries: Iterable<[K, V]>`                                                                                                                    |
-| `mDelete(keys)`                               | `Promise<void>`                   |                                                                                                                                                |
-| `keys()`                                      | `Promise<K[]>`                    | MRU first.                                                                                                                                     |
-| `values()`                                    | `Promise<V[]>`                    | MRU first.                                                                                                                                     |
-| `entries()`                                   | `Promise<[K,V][]>`                | MRU first.                                                                                                                                     |
-| `[Symbol.asyncIterator]()`                    | `AsyncIterableIterator<[K,V]>`    | `for await (const [k,v] of cache)`. Materializes the full set up front.                                                                        |
-| `dump()`                                      | `Promise<[K, Entry][]>`           | Serializable form.                                                                                                                             |
-| `load(entries)`                               | `Promise<void>`                   | Restores from a `dump()`.                                                                                                                      |
-| `size()`                                      | `Promise<number>`                 |                                                                                                                                                |
-| `stats()`                                     | `Promise<Stats>`                  | `{ hits, misses, sets, deletes, evictions, size, namespace }`.                                                                                 |
-| `incr(key, amount?, { ttl? })`                | `Promise<number>`                 | Atomic on the primary. `ttl` is set on the **first** write only — subsequent increments don't reset it (rate-limiter use).                     |
-| `decr(key, amount?, { ttl? })`                | `Promise<number>`                 | Same.                                                                                                                                          |
-| `fetch(key, fetcher, { ttl?, forceRefresh })` | `Promise<V>`                      | Cache-aside with worker-local in-flight dedup. Concurrent calls for the same key invoke `fetcher` once.                                        |
-| `max(value?)`                                 | `Promise<number>`                 | Getter and setter.                                                                                                                             |
-| `ttl(value?)`                                 | `Promise<number>`                 | Getter and setter.                                                                                                                             |
-| `allowStale(value?)`                          | `Promise<boolean>`                | Getter and setter.                                                                                                                             |
-| `ready`                                       | `Promise<void>`                   | Resolves once worker init has been dispatched. Always resolves (init failures are swallowed) — useful purely for ordering before the first op. |
+| Method                              | Returns                   | Notes                                                     |
+| ----------------------------------- | ------------------------- | --------------------------------------------------------- |
+| `get(key)`                          | `Promise<V \| undefined>` |                                                           |
+| `set(key, value, { ttl? })`         | `Promise<boolean>`        |                                                           |
+| `setIfAbsent(key, value, { ttl? })` | `Promise<boolean>`        | Atomic on the primary. `false` if the key already exists. |
+| `delete(key)`                       | `Promise<boolean>`        |                                                           |
+| `has(key)`                          | `Promise<boolean>`        |                                                           |
+| `peek(key)`                         | `Promise<V \| undefined>` | Doesn't update LRU position.                              |
+| `clear()`                           | `Promise<void>`           |                                                           |
 
-## `wrap` — codec / compression helper
+### Multi
 
-Wraps a cache with an `encode`/`decode` codec so values are transparently transformed on the way in and out. Useful for compression (gzip/brotli), serialization (MessagePack), or any other symmetric transform. The codec choice stays with the caller — the library doesn't bundle a compression algorithm.
+| Method                    | Returns                           | Notes                       |
+| ------------------------- | --------------------------------- | --------------------------- |
+| `mGet(keys)`              | `Promise<Map<K, V \| undefined>>` |                             |
+| `mSet(entries, { ttl? })` | `Promise<void>`                   | `entries: Iterable<[K, V]>` |
+| `mDelete(keys)`           | `Promise<void>`                   |                             |
+
+### Enumeration
+
+| Method                     | Returns                         | Notes                                                            |
+| -------------------------- | ------------------------------- | ---------------------------------------------------------------- |
+| `keys()`                   | `Promise<K[]>`                  | MRU first.                                                       |
+| `values()`                 | `Promise<V[]>`                  | MRU first.                                                       |
+| `entries()`                | `Promise<[K, V][]>`             | MRU first.                                                       |
+| `[Symbol.asyncIterator]()` | `AsyncIterableIterator<[K, V]>` | `for await (const [k, v] of cache)` — materializes the full set. |
+| `dump()`                   | `Promise<[K, Entry][]>`         | Serializable snapshot.                                           |
+| `load(entries)`            | `Promise<void>`                 | Restores from a `dump()`.                                        |
+| `size()`                   | `Promise<number>`               |                                                                  |
+
+### Counters & cache-aside
+
+| Method                                        | Returns           | Notes                                                                                                             |
+| --------------------------------------------- | ----------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `incr(key, amount?, { ttl? })`                | `Promise<number>` | Atomic on the primary. `ttl` is set on the **first** write only; later increments don't reset it (rate limiters). |
+| `decr(key, amount?, { ttl? })`                | `Promise<number>` | Same.                                                                                                             |
+| `fetch(key, fetcher, { ttl?, forceRefresh })` | `Promise<V>`      | Cache-aside with worker-local in-flight dedup. See the [per-worker dedup caveat](#per-worker-dedup).              |
+
+### Lifecycle, metrics, tunables
+
+| Method                 | Returns                 | Notes                                                                                   |
+| ---------------------- | ----------------------- | --------------------------------------------------------------------------------------- |
+| `getRemainingTTL(key)` | `Promise<number>`       | ms until expiry. `Infinity` for keys with no TTL; `0` for missing keys.                 |
+| `purgeStale()`         | `Promise<boolean>`      | Removes expired entries.                                                                |
+| `stats()`              | `Promise<Stats>`        | `{ hits, misses, sets, deletes, evictions, size, namespace }`.                          |
+| `getCache()`           | `LRUCache \| undefined` | Underlying `lru-cache` for this namespace. **Primary only**.                            |
+| `ready`                | `Promise<void>`         | Resolves once worker init has been dispatched. Useful for ordering before the first op. |
+| `max(value?)`          | `Promise<number>`       | Getter and setter.                                                                      |
+| `ttl(value?)`          | `Promise<number>`       | Getter and setter.                                                                      |
+| `allowStale(value?)`   | `Promise<boolean>`      | Getter and setter.                                                                      |
+
+## `wrap` — codec / compression
+
+`wrap(cache, codec)` returns a typed view where values pass through an `encode` / `decode` pair on the way in and out. Use it for compression (gzip, brotli), serialization (MessagePack), or any custom symmetric transform. The library stays codec-agnostic — bring your own.
 
 ```ts
 import { gzipSync, gunzipSync } from 'node:zlib';
@@ -132,18 +159,16 @@ const cache = wrap(inner, {
 });
 
 await cache.set('user:42', { id: 42, name: 'ada' });
-const u = await cache.get('user:42'); // decoded back to the original object
+await cache.get('user:42'); // decoded back to { id: 42, name: 'ada' }
 ```
 
-Both `encode` and `decode` may be sync or async. The wrapped surface covers the value-touching methods (`get`, `set`, `setIfAbsent`, `peek`, `mGet`, `mSet`, `values`, `entries`, `[Symbol.asyncIterator]`, `fetch`) plus the lifecycle/metric pass-throughs (`has`, `delete`, `keys`, `size`, `clear`, `purgeStale`, `getRemainingTTL`, `stats`).
+`encode` and `decode` may be sync or async. The wrapped surface covers value-touching ops (`get`, `set`, `setIfAbsent`, `peek`, `mGet`, `mSet`, `values`, `entries`, async iteration, `fetch`) plus the lifecycle and metric pass-throughs (`has`, `delete`, `keys`, `size`, `clear`, `purgeStale`, `getRemainingTTL`, `stats`).
 
-`incr`/`decr` and `dump`/`load` are **not** in the wrapped surface — they speak in numbers or the raw stored form. Reach them via `wrapped.cache` if you need them.
+`incr` / `decr` and `dump` / `load` are not wrapped — they speak in numbers or the raw stored form. Reach them via `wrapped.cache` if you need them.
 
 ## `memoize` helper
 
-Wraps a function as cache-aside in one line.
-
-> **Per-worker dedup.** Concurrent invocations for the same key in the _same_ worker share a single in-flight `fetcher` call. Workers do not share the in-flight slot, so two workers racing on the same missing key may both invoke `fetcher`. The cache itself stays consistent (last-write-wins on the primary), but the underlying call may run more than once across the cluster. The same caveat applies to `cache.fetch(...)`. If at-most-once invocation is required, your `fetcher` needs its own coordination (e.g. a primary-side lock).
+Cache-aside in one line. Concurrent calls for the same key dedupe to a single underlying invocation _within the same worker_.
 
 ```ts
 import { LRUCacheForClustersAsPromised, memoize } from 'lru-cache-for-clusters-as-promised';
@@ -161,9 +186,21 @@ await getUser('42'); // first call: hits DB
 await getUser('42'); // second call: cached
 ```
 
+### Per-worker dedup
+
+Both `memoize()` and `cache.fetch()` dedupe concurrent calls inside a single worker. They do **not** coordinate across workers. Two workers racing on the same missing key may both invoke `fetcher` — the cache itself stays consistent (last-write-wins on the primary), but the underlying call may run more than once across the cluster.
+
+If at-most-once invocation is required (expensive APIs, paid endpoints, side effects), your `fetcher` needs its own coordination — e.g. a primary-side lock or a dedicated single-flight worker.
+
+## Errors
+
+**Worker mode.** When a primary-side handler throws, the worker's promise rejects with a reconstructed `Error` carrying the original `name`, `message`, `code`, `stack`, and `cause` chain. The rejected value is always a plain `Error` (subclass identity isn't crossed over IPC), but `.name`, `.code`, and `.cause` are intact, so logging and cause-chain walking work. Errors travel as `{ name, message, code?, stack?, cause? }` on the wire.
+
+**Primary mode.** No IPC: a thrown `Error` rejects as-is (subclass identity preserved); a thrown non-`Error` value is wrapped in `new Error(String(value))`. For `Error` throws the two modes are observably equivalent.
+
 ## Migrating from v1.x
 
-The package's API now mirrors `lru-cache@11` directly. Common renames:
+The v2 API mirrors `lru-cache@11`. Common renames:
 
 | v1.x                             | v2.0                                                        |
 | -------------------------------- | ----------------------------------------------------------- |
@@ -184,8 +221,6 @@ The package's API now mirrors `lru-cache@11` directly. Common renames:
 
 ## Debugging
 
-Set `DEBUG=lru-cache-for-clusters-as-promised-*` for IPC tracing:
-
 ```sh
 DEBUG=lru-cache-for-clusters-as-promised-* node app.js
 ```
@@ -197,4 +232,4 @@ Available namespaces:
 
 ## License
 
-MIT
+MIT — see [LICENSE](./LICENSE).

@@ -1,5 +1,5 @@
 {
-  "name": "lru-cache-for-clusters-as-promised",
+  "name": "@0xdoublesharp/lru-cache-clustered",
   "version": "2.0.0",
   "description": "LRU Cache that is safe for clusters, based on lru-cache. Save memory by only caching items on the main thread via a promisified interface.",
   "type": "module",
@@ -35,6 +35,7 @@
   "packageManager": "pnpm@10.33.2",
   "scripts": {
     "build": "tsup && tsc -p tsconfig.build.json && cp dist/index.d.ts dist/index.d.cts",
+    "prepare:publish": "node scripts/prepare-publish.mjs",
     "example:users": "node --import tsx examples/clustered-users-server.ts",
     "example:rate-limit": "node --import tsx examples/clustered-rate-limit-server.ts",
     "example:sessions": "node --import tsx examples/clustered-session-server.ts",
@@ -72,8 +73,12 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/doublesharp/lru-cache-for-clusters-as-promised.git"
+    "url": "git+https://github.com/doublesharp/lru-cache-clustered.git"
   },
+  "bugs": {
+    "url": "https://github.com/doublesharp/lru-cache-clustered/issues"
+  },
+  "homepage": "https://github.com/doublesharp/lru-cache-clustered#readme",
   "keywords": [
     "lru",
     "mru",

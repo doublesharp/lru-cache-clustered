@@ -5,9 +5,9 @@
 export const SOURCE = 'lcfcap' as const;
 type Source = typeof SOURCE;
 
-// Debug namespace prefix kept as the full package name so the documented
-// `DEBUG=lru-cache-for-clusters-as-promised-*` env var continues to work.
-export const DEBUG_PREFIX = 'lru-cache-for-clusters-as-promised';
+// Keep the debug namespace unscoped so it stays ergonomic in `DEBUG=...` and
+// stable across the canonical scoped package and the mirrored legacy publish.
+export const DEBUG_PREFIX = 'lru-cache-clustered';
 
 type RequestBase = {
   id: string;

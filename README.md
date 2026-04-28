@@ -1,9 +1,11 @@
-# lru-cache-for-clusters-as-promised
+# @0xdoublesharp/lru-cache-clustered
 
-[![lru-cache-for-clusters-as-promised](https://img.shields.io/npm/v/lru-cache-for-clusters-as-promised.svg)](https://www.npmjs.com/package/lru-cache-for-clusters-as-promised)
-[![CI](https://github.com/doublesharp/lru-cache-for-clusters-as-promised/actions/workflows/ci.yml/badge.svg)](https://github.com/doublesharp/lru-cache-for-clusters-as-promised/actions/workflows/ci.yml)
-[![codecov](https://codecov.io/gh/doublesharp/lru-cache-for-clusters-as-promised/branch/main/graph/badge.svg)](https://codecov.io/gh/doublesharp/lru-cache-for-clusters-as-promised)
-[![Downloads](https://img.shields.io/npm/dt/lru-cache-for-clusters-as-promised.svg)](https://www.npmjs.com/package/lru-cache-for-clusters-as-promised)
+[![npm](https://img.shields.io/npm/v/%400xdoublesharp%2Flru-cache-clustered.svg)](https://www.npmjs.com/package/@0xdoublesharp/lru-cache-clustered)
+[![CI](https://github.com/doublesharp/lru-cache-clustered/actions/workflows/ci.yml/badge.svg)](https://github.com/doublesharp/lru-cache-clustered/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/doublesharp/lru-cache-clustered/branch/main/graph/badge.svg)](https://codecov.io/gh/doublesharp/lru-cache-clustered)
+[![Downloads](https://img.shields.io/npm/dt/%400xdoublesharp%2Flru-cache-clustered.svg)](https://www.npmjs.com/package/@0xdoublesharp/lru-cache-clustered)
+
+> `@0xdoublesharp/lru-cache-clustered` is the canonical package name. `lru-cache-for-clusters-as-promised` remains published as a mirrored legacy alias during the migration window.
 
 **One LRU cache, shared across every worker in your `node:cluster` app.** A typed Promise wrapper around [`lru-cache`](https://www.npmjs.com/package/lru-cache) that lives on the primary process and is reached from workers via IPC — so memory only gets paid once, not per worker. Outside `cluster`, it's a Promise interface to a plain in-process `lru-cache`.
 
@@ -22,17 +24,19 @@
 `lru-cache` is a peer dependency. Install it alongside this package so you control the version.
 
 ```sh
-npm install lru-cache-for-clusters-as-promised lru-cache
-pnpm add lru-cache-for-clusters-as-promised lru-cache
-yarn add lru-cache-for-clusters-as-promised lru-cache
+npm install @0xdoublesharp/lru-cache-clustered lru-cache
+pnpm add @0xdoublesharp/lru-cache-clustered lru-cache
+yarn add @0xdoublesharp/lru-cache-clustered lru-cache
 ```
+
+If you need to hold the legacy package name during migration, the same release line is also published as `lru-cache-for-clusters-as-promised`.
 
 ## Quick start
 
 ```ts
 import cluster from 'node:cluster';
 import { availableParallelism } from 'node:os';
-import { LRUCacheClustered } from 'lru-cache-for-clusters-as-promised';
+import { LRUCacheClustered } from '@0xdoublesharp/lru-cache-clustered';
 
 LRUCacheClustered.bootstrap();
 
@@ -68,7 +72,7 @@ Runnable clustered server examples live in [`examples/README.md`](./examples/REA
 ## How it works
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/doublesharp/lru-cache-for-clusters-as-promised/main/assets/topology.svg" alt="One LRU cache shared across cluster workers via IPC. The primary process holds a Map of namespaced LRUCache instances; each worker sends typed IPC requests to the primary for every cache operation. In primary mode the dispatcher is invoked directly with no IPC." width="100%">
+  <img src="https://raw.githubusercontent.com/doublesharp/lru-cache-clustered/main/assets/topology.svg" alt="One LRU cache shared across cluster workers via IPC. The primary process holds a Map of namespaced LRUCache instances; each worker sends typed IPC requests to the primary for every cache operation. In primary mode the dispatcher is invoked directly with no IPC." width="100%">
 </p>
 
 `new LRUCacheClustered(...)` branches at construction:
@@ -178,7 +182,7 @@ Function-valued `lru-cache` options such as `dispose`, `disposeAfter`, `sizeCalc
 
 ```ts
 import { gzipSync, gunzipSync } from 'node:zlib';
-import { LRUCacheClustered, wrap } from 'lru-cache-for-clusters-as-promised';
+import { LRUCacheClustered, wrap } from '@0xdoublesharp/lru-cache-clustered';
 
 const inner = new LRUCacheClustered<string, Buffer>({ namespace: 'big-blobs', max: 1000 });
 
@@ -200,7 +204,7 @@ await cache.get('user:42'); // decoded back to { id: 42, name: 'ada' }
 Cache-aside in one line. Concurrent calls for the same key coordinate through `cache.fetch()` so only one caller does the underlying work at a time.
 
 ```ts
-import { LRUCacheClustered, memoize } from 'lru-cache-for-clusters-as-promised';
+import { LRUCacheClustered, memoize } from '@0xdoublesharp/lru-cache-clustered';
 
 const cache = new LRUCacheClustered<string, User>({ namespace: 'users', ttl: 60_000 });
 
@@ -248,16 +252,20 @@ Common method and option mappings from older releases:
 
 `incr` / `decr` are kept; they remain the cleanest way to do race-safe counters across workers.
 
+The canonical package name is now `@0xdoublesharp/lru-cache-clustered`. The legacy unscoped package name continues to mirror releases during the migration window.
+
 ## Debugging
 
 ```sh
-DEBUG=lru-cache-for-clusters-as-promised-* node app.js
+DEBUG=lru-cache-clustered-* node app.js
 ```
 
 Available namespaces:
 
-- `lru-cache-for-clusters-as-promised-primary` — cache creation, registry events
-- `lru-cache-for-clusters-as-promised-messages` — every request/response over IPC
+- `lru-cache-clustered-primary` — cache creation, registry events
+- `lru-cache-clustered-messages` — every request/response over IPC
+
+Older releases used `lru-cache-for-clusters-as-promised-*`.
 
 ## License
 

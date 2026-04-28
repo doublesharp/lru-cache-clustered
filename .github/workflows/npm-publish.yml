@@ -27,4 +27,6 @@ jobs:
       - run: pnpm run type-coverage
       - run: pnpm run build
       - run: pnpm run size
-      - run: pnpm publish --provenance --access public --no-git-checks
+      - run: pnpm run prepare:publish
+      - run: npm publish ./dist-publish/scoped --access public --provenance
+      - run: npm publish ./dist-publish/legacy --access public --provenance

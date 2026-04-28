@@ -10,7 +10,7 @@ pnpm example:idempotency
 pnpm example:documents
 ```
 
-They import `../src/index.ts` so you can exercise the current workspace without building first. If you copy either example into another app, switch that import to `lru-cache-for-clusters-as-promised`.
+They import `../src/index.ts` so you can exercise the current workspace without building first. If you copy either example into another app, switch that import to `@0xdoublesharp/lru-cache-clustered`.
 
 ## `clustered-users-server.ts`
 

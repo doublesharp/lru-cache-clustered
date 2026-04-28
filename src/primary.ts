@@ -11,6 +11,10 @@ import {
   type Stats,
 } from './messages.js';
 
+// Distributive Omit so each member of the Request union keeps its own shape.
+type DistributiveOmit<T, K extends keyof never> = T extends unknown ? Omit<T, K> : never;
+export type ExecPayload = DistributiveOmit<Request, 'id' | 'namespace' | 'source'>;
+
 const debug = Debug(`${SOURCE}-primary`);
 const messagesDebug = Debug(`${SOURCE}-messages`);
 
@@ -60,180 +64,171 @@ export function getOrCreateCache(namespace: string, options: SerializableLruOpti
   return cache;
 }
 
+// Pure dispatch: returns the value for the op or throws. Single source of truth
+// for op semantics; both `handleRequest` (IPC entry point) and the in-process
+// primary fast-path in `index.ts` call this. Avoids object/promise allocation
+// per call when no IPC is involved.
+export function dispatchOp(namespace: string, payload: ExecPayload): unknown {
+  switch (payload.op) {
+    case 'init': {
+      const isNew = !caches.has(namespace);
+      const cache = getOrCreateCache(namespace, payload.options);
+      return { namespace, isNew, max: cache.max };
+    }
+    case 'get': {
+      const cache = getOrCreateCache(namespace, {});
+      const value = cache.get(k(payload.key));
+      const s = getStats(namespace);
+      if (value !== undefined) s.hits += 1;
+      else s.misses += 1;
+      return value;
+    }
+    case 'set': {
+      const cache = getOrCreateCache(namespace, {});
+      cache.set(k(payload.key), k(payload.value), payload.ttl ? { ttl: payload.ttl } : undefined);
+      getStats(namespace).sets += 1;
+      return true;
+    }
+    case 'setIfAbsent': {
+      const cache = getOrCreateCache(namespace, {});
+      if (cache.has(k(payload.key))) return false;
+      cache.set(k(payload.key), k(payload.value), payload.ttl ? { ttl: payload.ttl } : undefined);
+      getStats(namespace).sets += 1;
+      return true;
+    }
+    case 'delete': {
+      const cache = getOrCreateCache(namespace, {});
+      const deleted = cache.delete(k(payload.key));
+      if (deleted) getStats(namespace).deletes += 1;
+      return deleted;
+    }
+    case 'has':
+      return getOrCreateCache(namespace, {}).has(k(payload.key));
+    case 'peek':
+      return getOrCreateCache(namespace, {}).peek(k(payload.key));
+    case 'getRemainingTTL':
+      return getOrCreateCache(namespace, {}).getRemainingTTL(k(payload.key));
+    case 'clear':
+      getOrCreateCache(namespace, {}).clear();
+      return undefined;
+    case 'mGet': {
+      const cache = getOrCreateCache(namespace, {});
+      const s = getStats(namespace);
+      return payload.keys.map((key) => {
+        const value = cache.get(k(key));
+        if (value !== undefined) s.hits += 1;
+        else s.misses += 1;
+        return [key, value] as [unknown, unknown];
+      });
+    }
+    case 'mSet': {
+      const cache = getOrCreateCache(namespace, {});
+      const setOpts = payload.ttl ? { ttl: payload.ttl } : undefined;
+      const s = getStats(namespace);
+      for (const [key, value] of payload.entries) {
+        cache.set(k(key), k(value), setOpts);
+        s.sets += 1;
+      }
+      return undefined;
+    }
+    case 'mDelete': {
+      const cache = getOrCreateCache(namespace, {});
+      const s = getStats(namespace);
+      for (const key of payload.keys) {
+        if (cache.delete(k(key))) s.deletes += 1;
+      }
+      return undefined;
+    }
+    case 'keys':
+      return [...getOrCreateCache(namespace, {}).keys()];
+    case 'values':
+      return [...getOrCreateCache(namespace, {}).values()];
+    case 'entries':
+      return [...getOrCreateCache(namespace, {}).entries()];
+    case 'dump':
+      return getOrCreateCache(namespace, {}).dump();
+    case 'load': {
+      const cache = getOrCreateCache(namespace, {});
+      cache.load(payload.entries as Array<[NonNullish, LRUCache.Entry<NonNullish>]>);
+      return undefined;
+    }
+    case 'size':
+      return getOrCreateCache(namespace, {}).size;
+    case 'stats': {
+      const cache = getOrCreateCache(namespace, {});
+      const s = getStats(namespace);
+      s.size = cache.size;
+      return { ...s };
+    }
+    case 'purgeStale':
+      return getOrCreateCache(namespace, {}).purgeStale();
+    case 'incr':
+    case 'decr': {
+      const cache = getOrCreateCache(namespace, {});
+      const existed = cache.has(k(payload.key));
+      const current = cache.get(k(payload.key));
+      const base = typeof current === 'number' ? current : 0;
+      const delta = (payload.amount ?? 1) * (payload.op === 'decr' ? -1 : 1);
+      const next = base + delta;
+      // Rate-limiter semantics: ttl on first write only. For pre-existing
+      // keys, noUpdateTTL keeps the original expiration ticking — without
+      // it, `cache.set(k, v)` would reset to the cache's default ttl (or
+      // strip it entirely if the cache has none).
+      const setOpts: { ttl?: number; noUpdateTTL?: boolean } | undefined = existed
+        ? { noUpdateTTL: true }
+        : payload.ttl
+          ? { ttl: payload.ttl }
+          : undefined;
+      cache.set(k(payload.key), next, setOpts);
+      getStats(namespace).sets += 1;
+      return next;
+    }
+    case 'max': {
+      const cache = getOrCreateCache(namespace, {});
+      if (typeof payload.value === 'number' && payload.value !== cache.max) {
+        // lru-cache@11 has no setter for max — rebuild the cache preserving
+        // current entries (most recent first) and other tunables. Reuse the
+        // existing stats record so the dispose hook for the new instance
+        // continues to count evictions for the same namespace.
+        const s = getStats(namespace);
+        const replacement: AnyCache = new LRUCache({
+          max: payload.value,
+          ttl: (cache as unknown as { ttl: number }).ttl,
+          allowStale: (cache as unknown as { allowStale: boolean }).allowStale,
+          dispose: (_value: NonNullish, _key: NonNullish, reason: LRUCache.DisposeReason) => {
+            if (reason === 'evict') s.evictions += 1;
+          },
+        });
+        for (const [key, value] of cache.entries()) replacement.set(key, value);
+        caches.set(namespace, replacement);
+        return replacement.max;
+      }
+      return cache.max;
+    }
+    case 'ttl': {
+      const cache = getOrCreateCache(namespace, {});
+      if (typeof payload.value === 'number') (cache as unknown as { ttl: number }).ttl = payload.value;
+      return (cache as unknown as { ttl: number }).ttl;
+    }
+    case 'allowStale': {
+      const cache = getOrCreateCache(namespace, {});
+      if (typeof payload.value === 'boolean')
+        (cache as unknown as { allowStale: boolean }).allowStale = payload.value;
+      return (cache as unknown as { allowStale: boolean }).allowStale;
+    }
+    default: {
+      const op = (payload as { op: string }).op;
+      throw new Error(`unhandled op: ${op}`);
+    }
+  }
+}
+
 export function handleRequest(request: Request): Response {
   if (typeof request !== 'object' || request === null) {
     return err(request, 'invalid request: not an object');
   }
   try {
-    switch (request.op) {
-      case 'init': {
-        const isNew = !caches.has(request.namespace);
-        const cache = getOrCreateCache(request.namespace, request.options);
-        return ok(request, {
-          namespace: request.namespace,
-          isNew,
-          max: cache.max,
-        });
-      }
-      case 'get': {
-        const cache = getOrCreateCache(request.namespace, {});
-        const value = cache.get(k(request.key));
-        const s = getStats(request.namespace);
-        if (value !== undefined) s.hits += 1;
-        else s.misses += 1;
-        return ok(request, value);
-      }
-      case 'set': {
-        const cache = getOrCreateCache(request.namespace, {});
-        cache.set(k(request.key), k(request.value), request.ttl ? { ttl: request.ttl } : undefined);
-        getStats(request.namespace).sets += 1;
-        return ok(request, true);
-      }
-      case 'setIfAbsent': {
-        const cache = getOrCreateCache(request.namespace, {});
-        if (cache.has(k(request.key))) return ok(request, false);
-        cache.set(k(request.key), k(request.value), request.ttl ? { ttl: request.ttl } : undefined);
-        getStats(request.namespace).sets += 1;
-        return ok(request, true);
-      }
-      case 'delete': {
-        const cache = getOrCreateCache(request.namespace, {});
-        const deleted = cache.delete(k(request.key));
-        if (deleted) getStats(request.namespace).deletes += 1;
-        return ok(request, deleted);
-      }
-      case 'has': {
-        return ok(request, getOrCreateCache(request.namespace, {}).has(k(request.key)));
-      }
-      case 'peek': {
-        return ok(request, getOrCreateCache(request.namespace, {}).peek(k(request.key)));
-      }
-      case 'getRemainingTTL': {
-        return ok(request, getOrCreateCache(request.namespace, {}).getRemainingTTL(k(request.key)));
-      }
-      case 'clear': {
-        getOrCreateCache(request.namespace, {}).clear();
-        return ok(request, undefined);
-      }
-      case 'mGet': {
-        const cache = getOrCreateCache(request.namespace, {});
-        const s = getStats(request.namespace);
-        const out: Array<[unknown, unknown]> = request.keys.map((key) => {
-          const value = cache.get(k(key));
-          if (value !== undefined) s.hits += 1;
-          else s.misses += 1;
-          return [key, value];
-        });
-        return ok(request, out);
-      }
-      case 'mSet': {
-        const cache = getOrCreateCache(request.namespace, {});
-        const setOpts = request.ttl ? { ttl: request.ttl } : undefined;
-        const s = getStats(request.namespace);
-        for (const [key, value] of request.entries) {
-          cache.set(k(key), k(value), setOpts);
-          s.sets += 1;
-        }
-        return ok(request, undefined);
-      }
-      case 'mDelete': {
-        const cache = getOrCreateCache(request.namespace, {});
-        const s = getStats(request.namespace);
-        for (const key of request.keys) {
-          if (cache.delete(k(key))) s.deletes += 1;
-        }
-        return ok(request, undefined);
-      }
-      case 'keys': {
-        return ok(request, [...getOrCreateCache(request.namespace, {}).keys()]);
-      }
-      case 'values': {
-        return ok(request, [...getOrCreateCache(request.namespace, {}).values()]);
-      }
-      case 'entries': {
-        return ok(request, [...getOrCreateCache(request.namespace, {}).entries()]);
-      }
-      case 'dump': {
-        return ok(request, getOrCreateCache(request.namespace, {}).dump());
-      }
-      case 'load': {
-        const cache = getOrCreateCache(request.namespace, {});
-        cache.load(request.entries as Array<[NonNullish, LRUCache.Entry<NonNullish>]>);
-        return ok(request, undefined);
-      }
-      case 'size': {
-        return ok(request, getOrCreateCache(request.namespace, {}).size);
-      }
-      case 'stats': {
-        const cache = getOrCreateCache(request.namespace, {});
-        const s = getStats(request.namespace);
-        s.size = cache.size;
-        return ok(request, { ...s });
-      }
-      case 'purgeStale': {
-        return ok(request, getOrCreateCache(request.namespace, {}).purgeStale());
-      }
-      case 'incr':
-      case 'decr': {
-        const cache = getOrCreateCache(request.namespace, {});
-        const existed = cache.has(k(request.key));
-        const current = cache.get(k(request.key));
-        const base = typeof current === 'number' ? current : 0;
-        const delta = (request.amount ?? 1) * (request.op === 'decr' ? -1 : 1);
-        const next = base + delta;
-        // Rate-limiter semantics: ttl on first write only. For pre-existing
-        // keys, noUpdateTTL keeps the original expiration ticking — without
-        // it, `cache.set(k, v)` would reset to the cache's default ttl (or
-        // strip it entirely if the cache has none).
-        const setOpts: { ttl?: number; noUpdateTTL?: boolean } | undefined = existed
-          ? { noUpdateTTL: true }
-          : request.ttl
-            ? { ttl: request.ttl }
-            : undefined;
-        cache.set(k(request.key), next, setOpts);
-        getStats(request.namespace).sets += 1;
-        return ok(request, next);
-      }
-      case 'max': {
-        const cache = getOrCreateCache(request.namespace, {});
-        if (typeof request.value === 'number' && request.value !== cache.max) {
-          // lru-cache@11 has no setter for max — rebuild the cache preserving
-          // current entries (most recent first) and other tunables. Reuse the
-          // existing stats record so the dispose hook for the new instance
-          // continues to count evictions for the same namespace.
-          const s = getStats(request.namespace);
-          const replacement: AnyCache = new LRUCache({
-            max: request.value,
-            ttl: (cache as unknown as { ttl: number }).ttl,
-            allowStale: (cache as unknown as { allowStale: boolean }).allowStale,
-            dispose: (_value: NonNullish, _key: NonNullish, reason: LRUCache.DisposeReason) => {
-              if (reason === 'evict') s.evictions += 1;
-            },
-          });
-          for (const [key, value] of cache.entries()) replacement.set(key, value);
-          caches.set(request.namespace, replacement);
-          return ok(request, replacement.max);
-        }
-        return ok(request, cache.max);
-      }
-      case 'ttl': {
-        const cache = getOrCreateCache(request.namespace, {});
-        if (typeof request.value === 'number') (cache as unknown as { ttl: number }).ttl = request.value;
-        return ok(request, (cache as unknown as { ttl: number }).ttl);
-      }
-      case 'allowStale': {
-        const cache = getOrCreateCache(request.namespace, {});
-        if (typeof request.value === 'boolean')
-          (cache as unknown as { allowStale: boolean }).allowStale = request.value;
-        return ok(request, (cache as unknown as { allowStale: boolean }).allowStale);
-      }
-      default: {
-        // After exhaustive cases, request narrows to `never` — at runtime it
-        // can still arrive (callers may send a bogus op via untyped IPC).
-        const op = (request as { op: string }).op;
-        return err(request, `unhandled op: ${op}`);
-      }
-    }
+    return ok(request, dispatchOp(request.namespace, request));
   } catch (e) {
     return err(request, e);
   }

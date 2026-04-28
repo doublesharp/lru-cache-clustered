@@ -1,16 +1,8 @@
 import cluster from 'node:cluster';
-import { randomUUID } from 'node:crypto';
 import { LRUCache } from 'lru-cache';
-import { caches, getOrCreateCache, handleRequest, installClusterListener } from './primary.js';
-import { defaultClient, type IpcClient, type RequestPayload } from './worker.js';
-import {
-  SOURCE,
-  deserializeError,
-  type Request,
-  type Response,
-  type SerializableLruOptions,
-  type Stats,
-} from './messages.js';
+import { caches, dispatchOp, getOrCreateCache, installClusterListener, type ExecPayload } from './primary.js';
+import { defaultClient, type IpcClient } from './worker.js';
+import { type SerializableLruOptions, type Stats } from './messages.js';
 
 if (cluster.isPrimary) installClusterListener();
 
@@ -228,17 +220,13 @@ export class LRUCacheForClustersAsPromised<K = string, V = unknown> {
     return p;
   }
 
-  #dispatch<T>(payload: RequestPayload): Promise<T> {
+  #dispatch<T>(payload: ExecPayload): Promise<T> {
     if (cluster.isPrimary) {
-      const req: Request = {
-        id: randomUUID(),
-        namespace: this.namespace,
-        source: SOURCE,
-        ...payload,
-      };
-      const res: Response = handleRequest(req);
-      if (res.ok) return Promise.resolve(res.value as T);
-      return Promise.reject(deserializeError(res.error));
+      try {
+        return Promise.resolve(dispatchOp(this.namespace, payload) as T);
+      } catch (e) {
+        return Promise.reject(e instanceof Error ? e : new Error(String(e)));
+      }
     }
     return this.#client.sendToPrimary<T>(
       {

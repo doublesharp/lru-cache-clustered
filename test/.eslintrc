@@ -1,9 +1,0 @@
-{
-  "plugins": ["mocha"],
-  "env": {
-    "mocha": true
-  },
-  "rules": {
-    "global-require": 0
-  }
-}

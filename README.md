@@ -54,6 +54,10 @@ When you create a `LRUCacheForClustersAsPromised` instance, it branches at const
 
 Multiple instances in different workers that share a `namespace` operate on the same primary-side cache. This is the savings: only one copy of the data lives in memory.
 
+## Errors
+
+When a primary-side handler throws, the worker's promise rejects with a reconstructed `Error` that preserves the original `name`, `message`, `code`, `stack`, and `cause` chain — not just the message. The reconstructed value is always a plain `Error` (subclass identity isn't crossed over IPC), but `err.name`, `err.code`, and `err.cause` are intact, so logging and cause-chain walking work. Errors are serialized as `{ name, message, code?, stack?, cause? }` on the wire.
+
 ## Options
 
 All `LRUCache` constructor options from [`lru-cache@11`](https://github.com/isaacs/node-lru-cache) are passed through (`max`, `ttl`, `allowStale`, `updateAgeOnGet`, etc.). Plus:

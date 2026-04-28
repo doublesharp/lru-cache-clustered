@@ -192,6 +192,23 @@ void test('wrap: passthrough methods (has/delete/clear/size/getRemainingTTL/purg
   assert.equal(typeof (await c.purgeStale()), 'boolean');
 });
 
+void test('wrap: size-bounded caches and lifecycle passthroughs work', async () => {
+  caches.clear();
+  const inner = new LRUCacheForClustersAsPromised<string, string>({
+    namespace: 'codec-size-pass',
+    maxSize: 10,
+    ttl: 1_000,
+  });
+  const c = wrap(inner, identityCodec);
+
+  await assert.doesNotReject(c.healthCheck());
+  await c.set('a', 'AA', { size: 2 });
+  await c.mSet([['b', 'BBB', { size: 3 }]]);
+  assert.equal(await c.get('a'), 'AA');
+  assert.equal(await c.get('b'), 'BBB');
+  assert.equal(await c.destroy(), true);
+});
+
 void test('wrap: stats reflect underlying cache activity', async () => {
   caches.clear();
   const inner = new LRUCacheForClustersAsPromised<string, string>({ namespace: 'codec-stats', max: 10 });

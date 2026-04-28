@@ -1,5 +1,5 @@
 import type { Stats } from './messages.js';
-import type { LRUCacheForClustersAsPromised } from './index.js';
+import type { FetchOptions, LRUCacheForClustersAsPromised, MSetEntry, WriteOptions } from './index.js';
 
 // A codec is a symmetric encode/decode pair. Both directions may be sync or
 // async — gzip/brotli's sync flavours work fine, and so do MessagePack-style
@@ -22,15 +22,15 @@ export interface WrappedCache<K, V> {
   readonly ready: Promise<void>;
 
   get(key: K): Promise<V | undefined>;
-  set(key: K, value: V, opts?: { ttl?: number }): Promise<boolean>;
-  setIfAbsent(key: K, value: V, opts?: { ttl?: number }): Promise<boolean>;
+  set(key: K, value: V, opts?: WriteOptions): Promise<boolean>;
+  setIfAbsent(key: K, value: V, opts?: WriteOptions): Promise<boolean>;
   has(key: K): Promise<boolean>;
   peek(key: K): Promise<V | undefined>;
   delete(key: K): Promise<boolean>;
   getRemainingTTL(key: K): Promise<number>;
 
   mGet(keys: K[]): Promise<Map<K, V | undefined>>;
-  mSet(entries: Iterable<[K, V]>, opts?: { ttl?: number }): Promise<void>;
+  mSet(entries: Iterable<MSetEntry<K, V>>, opts?: WriteOptions): Promise<void>;
   mDelete(keys: K[]): Promise<void>;
 
   keys(): Promise<K[]>;
@@ -40,10 +40,12 @@ export interface WrappedCache<K, V> {
   [Symbol.asyncIterator](): AsyncIterableIterator<[K, V]>;
 
   clear(): Promise<void>;
+  destroy(): Promise<boolean>;
+  healthCheck(): Promise<void>;
   purgeStale(): Promise<boolean>;
   stats(): Promise<Stats>;
 
-  fetch(key: K, fetcher: (key: K) => Promise<V> | V, opts?: { ttl?: number; forceRefresh?: boolean }): Promise<V>;
+  fetch(key: K, fetcher: (key: K) => Promise<V> | V, opts?: FetchOptions): Promise<V>;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type
@@ -90,8 +92,12 @@ export function wrap<K, V, U extends {}>(
       return out;
     },
     async mSet(entries, opts) {
-      const encoded: Array<[K, U]> = [];
-      for (const [k, v] of entries) encoded.push([k, await enc(v)]);
+      const encoded: Array<MSetEntry<K, U>> = [];
+      for (const entry of entries) {
+        const [k, v, entryOpts] = entry;
+        if (entryOpts === undefined) encoded.push([k, await enc(v)]);
+        else encoded.push([k, await enc(v), entryOpts]);
+      }
       return cache.mSet(encoded, opts);
     },
     mDelete: (keys) => cache.mDelete(keys),
@@ -115,6 +121,8 @@ export function wrap<K, V, U extends {}>(
     },
 
     clear: () => cache.clear(),
+    destroy: () => cache.destroy(),
+    healthCheck: () => cache.healthCheck(),
     purgeStale: () => cache.purgeStale(),
     stats: () => cache.stats(),
 

@@ -29,6 +29,7 @@ async function run() {
     namespace: 'integration',
     max: 10,
   });
+  await cache.healthCheck();
 
   await cache.set('k1', 'v1');
   const v1 = await cache.get('k1');
@@ -41,9 +42,27 @@ async function run() {
 
   const counter = await cache.incr('hits', 3);
 
+  const ephemeral = await LRUCacheForClustersAsPromised.getInstance<string, string>({
+    namespace: 'integration-destroy',
+    max: 5,
+    ttl: 1_000,
+  });
+  await ephemeral.set('before', 'x');
+  const destroyed = await ephemeral.destroy();
+  await ephemeral.set('after', 'y');
+  const recreatedTtl = await ephemeral.getRemainingTTL('after');
+
   process.send?.({
     kind: 'integration-results',
-    payload: { v1, got: [...got.entries()], counter, getAllCachesThrew, getCacheThrew },
+    payload: {
+      v1,
+      got: [...got.entries()],
+      counter,
+      destroyed,
+      recreatedTtl,
+      getAllCachesThrew,
+      getCacheThrew,
+    },
   });
 
   // Give the IPC message time to be delivered, then exit cleanly so V8 writes

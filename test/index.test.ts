@@ -117,6 +117,17 @@ void test('getCache returns the underlying lru-cache instance on primary', async
   assert.equal((inner as { get: (k: string) => unknown }).get('a'), 'b');
 });
 
+void test('bootstrap is idempotent on primary', () => {
+  assert.doesNotThrow(() => LRUCacheForClustersAsPromised.bootstrap());
+  assert.doesNotThrow(() => LRUCacheForClustersAsPromised.bootstrap());
+});
+
+void test('healthCheck resolves on primary', async () => {
+  caches.clear();
+  const cache = new LRUCacheForClustersAsPromised<string, string>({ namespace: 'health-1', max: 5 });
+  await assert.doesNotReject(cache.healthCheck());
+});
+
 void test('peek does not promote, dump and purgeStale work', async () => {
   caches.clear();
   const cache = new LRUCacheForClustersAsPromised<string, string>({ namespace: 'pdp', max: 3 });
@@ -151,6 +162,42 @@ void test('set with ttl and mSet with ttl', async () => {
   assert.equal(await cache.get('a'), 'A');
   assert.equal(await cache.get('b'), 'B');
   assert.equal(await cache.get('c'), 'C');
+});
+
+void test('size-bounded caches accept size on set/setIfAbsent/mSet', async () => {
+  caches.clear();
+  const cache = new LRUCacheForClustersAsPromised<string, string>({
+    namespace: 'size-opt',
+    maxSize: 10,
+    maxEntrySize: 10,
+  });
+  await cache.set('a', 'AA', { size: 2 });
+  assert.equal(await cache.setIfAbsent('b', 'BBB', { size: 3 }), true);
+  await cache.mSet([
+    ['c', 'C', { size: 1 }],
+    ['d', 'DD', { size: 2 }],
+  ]);
+  assert.equal(await cache.get('a'), 'AA');
+  assert.equal(await cache.get('b'), 'BBB');
+  assert.equal(await cache.get('c'), 'C');
+  assert.equal(await cache.get('d'), 'DD');
+});
+
+void test('destroy removes a namespace and later reuse recreates it with original options', async () => {
+  caches.clear();
+  const cache = new LRUCacheForClustersAsPromised<string, string>({
+    namespace: 'destroy-1',
+    max: 10,
+    ttl: 1_000,
+  });
+  await cache.set('before', 'A');
+  assert.equal(LRUCacheForClustersAsPromised.getAllCaches().has('destroy-1'), true);
+  assert.equal(await cache.destroy(), true);
+  assert.equal(LRUCacheForClustersAsPromised.getAllCaches().has('destroy-1'), false);
+
+  await cache.set('after', 'B');
+  const ttl = await cache.getRemainingTTL('after');
+  assert.ok(ttl > 0 && ttl <= 1_000);
 });
 
 void test('primary-mode rejects nullish keys and values', async () => {
@@ -225,6 +272,17 @@ void test('decr accepts ttl option', async () => {
   const cache = new LRUCacheForClustersAsPromised<string, number>({ namespace: 'decr-ttl', max: 10 });
   const v = await cache.decr('counter', 2, { ttl: 60_000 });
   assert.equal(v, -2);
+});
+
+void test('counters reuse their existing size metadata in maxSize caches', async () => {
+  caches.clear();
+  const cache = new LRUCacheForClustersAsPromised<string, number>({
+    namespace: 'counter-size',
+    maxSize: 10,
+  });
+  assert.equal(await cache.incr('counter', 1, { size: 4 }), 1);
+  assert.equal(await cache.incr('counter'), 2);
+  assert.equal(await cache.decr('counter'), 1);
 });
 
 void test('ready resolves to undefined in primary mode', async () => {
@@ -363,17 +421,12 @@ void test('fetch shares a single miss-path get across concurrent callers', async
   caches.clear();
   const cache = new LRUCacheForClustersAsPromised<string, number>({ namespace: 'fetch-get-dedup', max: 10 });
   let getCalls = 0;
-  let setCalls = 0;
   let fetchCalls = 0;
 
   (cache as { get: (key: string) => Promise<number | undefined> }).get = async () => {
     getCalls += 1;
     await new Promise((r) => setTimeout(r, 10));
     return undefined;
-  };
-  (cache as { set: (key: string, value: number, opts?: { ttl?: number }) => Promise<boolean> }).set = async () => {
-    setCalls += 1;
-    return true;
   };
 
   const fetcher = async () => {
@@ -385,7 +438,6 @@ void test('fetch shares a single miss-path get across concurrent callers', async
   assert.deepEqual(results, [7, 7, 7]);
   assert.equal(getCalls, 1);
   assert.equal(fetchCalls, 1);
-  assert.equal(setCalls, 1);
 });
 
 void test('fetch with forceRefresh re-invokes fetcher', async () => {
@@ -400,6 +452,22 @@ void test('fetch with forceRefresh re-invokes fetcher', async () => {
   assert.equal(await cache.fetch('k', fetcher), 1); // cached
   assert.equal(await cache.fetch('k', fetcher, { forceRefresh: true }), 2);
   assert.equal(calls, 2);
+});
+
+void test('fetch accepts size-bounded writes', async () => {
+  caches.clear();
+  const cache = new LRUCacheForClustersAsPromised<string, string>({
+    namespace: 'fetch-size',
+    maxSize: 10,
+  });
+  let calls = 0;
+  const fetcher = async () => {
+    calls++;
+    return 'OK';
+  };
+  assert.equal(await cache.fetch('k', fetcher, { size: 2 }), 'OK');
+  assert.equal(await cache.fetch('k', fetcher, { size: 2 }), 'OK');
+  assert.equal(calls, 1);
 });
 
 void test('fetch forceRefresh ignores stale in-flight result', async () => {

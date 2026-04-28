@@ -38,20 +38,18 @@ void test('memoize dedups concurrent calls for the same key', async () => {
   assert.equal(calls, 1);
 });
 
-void test('memoize shares a single miss-path get across concurrent callers', async () => {
-  let getCalls = 0;
-  let setCalls = 0;
+void test('memoize delegates derived keys and options to cache.fetch', async () => {
+  let fetchCalls = 0;
+  let seenKey = '';
+  let seenOpts: unknown;
   let fnCalls = 0;
 
   const cache = {
-    get: async () => {
-      getCalls += 1;
-      await new Promise((r) => setTimeout(r, 10));
-      return undefined;
-    },
-    set: async () => {
-      setCalls += 1;
-      return true;
+    fetch: async (key: string, fetcher: (key: string) => Promise<number>, opts?: unknown) => {
+      fetchCalls += 1;
+      seenKey = key;
+      seenOpts = opts;
+      return fetcher(key);
     },
   } as unknown as LRUCacheForClustersAsPromised<string, number>;
 
@@ -62,13 +60,14 @@ void test('memoize shares a single miss-path get across concurrent callers', asy
       return n + 1;
     },
     (n: number) => `n:${n}`,
+    { ttl: 20, size: 2 },
   );
 
-  const results = await Promise.all([memo(1), memo(1), memo(1)]);
-  assert.deepEqual(results, [2, 2, 2]);
-  assert.equal(getCalls, 1);
+  assert.equal(await memo(1), 2);
+  assert.equal(fetchCalls, 1);
   assert.equal(fnCalls, 1);
-  assert.equal(setCalls, 1);
+  assert.equal(seenKey, 'n:1');
+  assert.deepEqual(seenOpts, { ttl: 20, size: 2 });
 });
 
 void test('memoize calls fn independently for different keys', async () => {
@@ -108,6 +107,25 @@ void test('memoize honors ttl on the underlying set', async () => {
 
   assert.equal(await memo(5), 6);
   assert.equal(calls, 2);
+});
+
+void test('memoize supports size-bounded caches via size option', async () => {
+  caches.clear();
+  const cache = new LRUCacheForClustersAsPromised<string, number>({ namespace: 'memo-size', maxSize: 10 });
+  let calls = 0;
+  const memo = memoize(
+    cache,
+    (n: number) => {
+      calls += 1;
+      return n;
+    },
+    (n: number) => `k:${n}`,
+    { size: 2 },
+  );
+
+  assert.equal(await memo(7), 7);
+  assert.equal(await memo(7), 7);
+  assert.equal(calls, 1);
 });
 
 void test('memoize propagates errors and clears in-flight slot', async () => {

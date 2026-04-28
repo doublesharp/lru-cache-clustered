@@ -13,14 +13,17 @@ type RequestBase = {
   id: string;
   namespace: string;
   source: Source;
+  cacheOptions?: SerializableLruOptions;
 };
 
 export type Request = RequestBase &
   (
     | { op: 'init'; options: SerializableLruOptions }
+    | { op: 'healthCheck' }
+    | { op: 'destroy' }
     | { op: 'get'; key: unknown }
-    | { op: 'set'; key: unknown; value: unknown; ttl?: number }
-    | { op: 'setIfAbsent'; key: unknown; value: unknown; ttl?: number }
+    | { op: 'set'; key: unknown; value: unknown; ttl?: number; size?: number }
+    | { op: 'setIfAbsent'; key: unknown; value: unknown; ttl?: number; size?: number }
     | { op: 'delete'; key: unknown }
     | { op: 'has'; key: unknown }
     | { op: 'peek'; key: unknown }
@@ -28,7 +31,12 @@ export type Request = RequestBase &
     | { op: 'clear' }
     | { op: 'purgeStale' }
     | { op: 'mGet'; keys: unknown[] }
-    | { op: 'mSet'; entries: Array<[unknown, unknown]>; ttl?: number }
+    | {
+        op: 'mSet';
+        entries: Array<[unknown, unknown] | [unknown, unknown, { ttl?: number; size?: number }]>;
+        ttl?: number;
+        size?: number;
+      }
     | { op: 'mDelete'; keys: unknown[] }
     | { op: 'keys' }
     | { op: 'values' }
@@ -37,8 +45,11 @@ export type Request = RequestBase &
     | { op: 'load'; entries: Array<[unknown, unknown]> }
     | { op: 'size' }
     | { op: 'stats' }
-    | { op: 'incr'; key: unknown; amount?: number; ttl?: number }
-    | { op: 'decr'; key: unknown; amount?: number; ttl?: number }
+    | { op: 'incr'; key: unknown; amount?: number; ttl?: number; size?: number }
+    | { op: 'decr'; key: unknown; amount?: number; ttl?: number; size?: number }
+    | { op: 'fetchClaim'; key: unknown; forceRefresh?: boolean }
+    | { op: 'fetchStore'; key: unknown; token: string; value: unknown; ttl?: number; size?: number }
+    | { op: 'fetchAbort'; key: unknown; token: string }
     | { op: 'allowStale'; value?: boolean }
     | { op: 'max'; value?: number }
     | { op: 'ttl'; value?: number }
@@ -64,6 +75,8 @@ export type Response = { id: string; source: Source } & (
 // Subset of LRUCache.Options that survives IPC structured-clone — no functions.
 export type SerializableLruOptions = {
   max?: number;
+  maxSize?: number;
+  maxEntrySize?: number;
   ttl?: number;
   allowStale?: boolean;
   updateAgeOnGet?: boolean;

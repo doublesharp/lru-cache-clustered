@@ -113,6 +113,8 @@ void test('cluster.fork roundtrip: worker can use IPC cache', { timeout: 15_000 
     v1: string;
     got: Array<[string, string | undefined]>;
     counter: number;
+    destroyed: boolean;
+    recreatedTtl: number;
     getAllCachesThrew: boolean;
     getCacheThrew: boolean;
   }>((resolve, reject) => {
@@ -147,8 +149,73 @@ void test('cluster.fork roundtrip: worker can use IPC cache', { timeout: 15_000 
     ['missing', undefined],
   ]);
   assert.equal(result.counter, 3);
+  assert.equal(result.destroyed, true);
+  assert.ok(result.recreatedTtl > 0 && result.recreatedTtl <= 1_000);
   assert.equal(result.getAllCachesThrew, true);
   assert.equal(result.getCacheThrew, true);
+});
+
+void test('cluster-wide fetch dedups across workers', { timeout: 15_000 }, async () => {
+  cluster.setupPrimary({
+    exec: path.join(here, 'fixtures', 'worker-fetch-child.ts'),
+    execArgv: ['--import', 'tsx'],
+    serialization: 'advanced',
+  });
+
+  const workers = [cluster.fork(), cluster.fork()];
+  let readyCount = 0;
+  let fetcherCalls = 0;
+  const results: Array<{ called: boolean; value: string }> = [];
+
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimer(() => {
+      for (const worker of workers) worker.kill();
+      reject(new Error('workers did not finish fetch test'));
+    }, 10_000);
+
+    const maybeFinish = () => {
+      if (results.length === workers.length) {
+        clearTimer(timer);
+        resolve();
+      }
+    };
+
+    for (const worker of workers) {
+      worker.on('message', (msg: { kind?: string; payload?: unknown }) => {
+        if (!msg) return;
+        if (msg.kind === 'fetch-ready') {
+          readyCount += 1;
+          if (readyCount === workers.length) {
+            for (const target of workers) target.send({ kind: 'start-fetch' });
+          }
+          return;
+        }
+        if (msg.kind === 'fetcher-called') {
+          fetcherCalls += 1;
+          return;
+        }
+        if (msg.kind === 'fetch-result') {
+          results.push(msg.payload as { called: boolean; value: string });
+          maybeFinish();
+        }
+      });
+      worker.on('error', (err) => {
+        clearTimer(timer);
+        reject(err);
+      });
+      worker.on('exit', (code) => {
+        if (code !== 0 && code !== null) {
+          clearTimer(timer);
+          reject(new Error(`worker exited with code ${code}`));
+        }
+      });
+    }
+  });
+
+  assert.equal(fetcherCalls, 1);
+  assert.equal(results.length, 2);
+  assert.equal(results.filter((result) => result.called).length, 1);
+  assert.equal(results[0]?.value, results[1]?.value);
 });
 
 void test(

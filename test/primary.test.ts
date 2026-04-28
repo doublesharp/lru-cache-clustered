@@ -73,6 +73,20 @@ void test('handleRequest op=init ignores explicitly undefined options on reuse',
   });
 });
 
+void test('handleRequest op=healthCheck creates or validates a namespace', () => {
+  caches.clear();
+  stats.clear();
+  const r = handleRequest({
+    id: 'h',
+    namespace: 'health-ns',
+    source: SOURCE,
+    cacheOptions: { max: 5, ttl: 1_000 },
+    op: 'healthCheck',
+  });
+  assert.equal(r.ok, true);
+  assert.ok(caches.has('health-ns'));
+});
+
 void test('handleRequest CRUD ops', () => {
   caches.clear();
   const ns = 'crud';
@@ -122,6 +136,36 @@ void test('handleRequest multi ops', () => {
     ['b', 2],
     ['c', undefined],
   ]);
+});
+
+void test('handleRequest size-bounded writes support per-call and per-entry size', () => {
+  caches.clear();
+  stats.clear();
+  const ns = 'sized';
+  const d = (op: string, extra: object = {}) =>
+    handleRequest({
+      id: 'r',
+      namespace: ns,
+      source: SOURCE,
+      cacheOptions: { maxSize: 10, maxEntrySize: 10 },
+      op,
+      ...extra,
+    } as Request);
+
+  d('healthCheck');
+  d('set', { key: 'a', value: 'AA', size: 2 });
+  d('setIfAbsent', { key: 'b', value: 'BBB', size: 3 });
+  d('mSet', {
+    entries: [
+      ['c', 'C', { size: 1 }],
+      ['d', 'DD', { size: 2 }],
+    ],
+  });
+
+  assert.equal((d('get', { key: 'a' }) as { value: unknown }).value, 'AA');
+  assert.equal((d('get', { key: 'b' }) as { value: unknown }).value, 'BBB');
+  assert.equal((d('get', { key: 'c' }) as { value: unknown }).value, 'C');
+  assert.equal((d('get', { key: 'd' }) as { value: unknown }).value, 'DD');
 });
 
 void test('handleRequest enumeration ops', () => {
@@ -264,6 +308,8 @@ void test('handleRequest max setter preserves all SerializableLruOptions', () =>
   d('init', {
     options: {
       max: 10,
+      maxSize: 100,
+      maxEntrySize: 50,
       ttl: 1000,
       allowStale: true,
       updateAgeOnGet: true,
@@ -272,12 +318,14 @@ void test('handleRequest max setter preserves all SerializableLruOptions', () =>
       ttlAutopurge: true,
     },
   });
-  d('set', { key: 'a', value: 1 });
+  d('set', { key: 'a', value: 1, size: 1 });
   d('max', { value: 50 });
 
   // All fields should survive the rebuild — read straight off the underlying cache.
   const cache = caches.get(ns) as unknown as {
     max: number;
+    maxSize: number;
+    maxEntrySize: number;
     ttl: number;
     allowStale: boolean;
     updateAgeOnGet: boolean;
@@ -286,6 +334,8 @@ void test('handleRequest max setter preserves all SerializableLruOptions', () =>
     ttlAutopurge: boolean;
   };
   assert.equal(cache.max, 50);
+  assert.equal(cache.maxSize, 100);
+  assert.equal(cache.maxEntrySize, 50);
   assert.equal(cache.ttl, 1000);
   assert.equal(cache.allowStale, true);
   assert.equal(cache.updateAgeOnGet, true);
@@ -390,6 +440,22 @@ void test('handleRequest op=load restores entries from a dump', () => {
   assert.equal((dispatch(dstNs, 'get', { key: 'b' }) as { value: unknown }).value, 2);
 });
 
+void test('handleRequest destroy removes cache, stats, and fetch locks', () => {
+  caches.clear();
+  stats.clear();
+  const ns = 'destroy-ns';
+  const d = (op: string, extra: object = {}) =>
+    handleRequest({ id: 'r', namespace: ns, source: SOURCE, op, ...extra } as Request);
+
+  d('init', { options: { max: 10 } });
+  d('set', { key: 'a', value: 1 });
+  const claim = (d('fetchClaim', { key: 'k' }) as { value: { kind: string; token?: string } }).value;
+  assert.equal(claim.kind, 'leader');
+  assert.equal((d('destroy') as { value: unknown }).value, true);
+  assert.equal(caches.has(ns), false);
+  assert.equal(stats.has(ns), false);
+});
+
 void test('handleRequest op=incr with ttl sets ttl only on first write', async () => {
   caches.clear();
   stats.clear();
@@ -431,6 +497,39 @@ void test('handleRequest op=decr with ttl sets ttl only on first write', () => {
   assert.equal((d('decr', { key: 'd', ttl: 45_000 }) as { value: unknown }).value, -1);
   const remaining = (d('getRemainingTTL', { key: 'd' }) as { value: unknown }).value as number;
   assert.ok(remaining > 0 && remaining <= 45_000);
+});
+
+void test('handleRequest fetch single-flight coordinates leader, follower, and forceRefresh', () => {
+  caches.clear();
+  stats.clear();
+  const ns = 'fetch-claim';
+  const d = (op: string, extra: object = {}) =>
+    handleRequest({ id: 'r', namespace: ns, source: SOURCE, op, ...extra } as Request);
+
+  d('init', { options: { max: 10 } });
+
+  const leader = (d('fetchClaim', { key: 'k' }) as { value: { kind: string; token?: string } }).value;
+  assert.equal(leader.kind, 'leader');
+  const follower = (d('fetchClaim', { key: 'k' }) as { value: { kind: string } }).value;
+  assert.equal(follower.kind, 'follower');
+  assert.equal((d('fetchStore', { key: 'k', token: leader.token, value: 'v' }) as { value: unknown }).value, true);
+  assert.equal((d('get', { key: 'k' }) as { value: unknown }).value, 'v');
+
+  const refreshA = (d('fetchClaim', { key: 'k', forceRefresh: true }) as { value: { kind: string; token?: string } })
+    .value;
+  const refreshB = (d('fetchClaim', { key: 'k', forceRefresh: true }) as { value: { kind: string; token?: string } })
+    .value;
+  assert.equal(refreshA.kind, 'leader');
+  assert.equal(refreshB.kind, 'leader');
+  assert.equal(
+    (d('fetchStore', { key: 'k', token: refreshA.token, value: 'stale' }) as { value: unknown }).value,
+    false,
+  );
+  assert.equal(
+    (d('fetchStore', { key: 'k', token: refreshB.token, value: 'fresh' }) as { value: unknown }).value,
+    true,
+  );
+  assert.equal((d('get', { key: 'k' }) as { value: unknown }).value, 'fresh');
 });
 
 void test('handleRequest op=stats returns counters after get/set/delete', () => {

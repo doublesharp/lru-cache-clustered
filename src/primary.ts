@@ -29,6 +29,19 @@ type AnyCache = LRUCache<NonNullish, NonNullish>;
 export const caches: Map<string, AnyCache> = new Map();
 export const stats: Map<string, Stats> = new Map();
 
+type DispatchContext = {
+  workerId?: number;
+};
+
+type FetchLock = {
+  token: string;
+  ownerWorkerId?: number;
+};
+
+let clusterListenerInstalled = false;
+let nextFetchToken = 0;
+const fetchLocks: Map<string, Map<NonNullish, FetchLock>> = new Map();
+
 function freshStats(namespace: string): Stats {
   return { namespace, hits: 0, misses: 0, sets: 0, deletes: 0, evictions: 0, size: 0 };
 }
@@ -50,6 +63,8 @@ function getStats(namespace: string): Stats {
 function readOptions(cache: AnyCache): SerializableLruOptions {
   const c = cache as unknown as {
     max: number;
+    maxSize: number;
+    maxEntrySize: number;
     ttl: number;
     allowStale: boolean;
     updateAgeOnGet: boolean;
@@ -59,6 +74,8 @@ function readOptions(cache: AnyCache): SerializableLruOptions {
   };
   return {
     max: c.max,
+    maxSize: c.maxSize,
+    maxEntrySize: c.maxEntrySize,
     ttl: c.ttl,
     allowStale: c.allowStale,
     updateAgeOnGet: c.updateAgeOnGet,
@@ -66,6 +83,16 @@ function readOptions(cache: AnyCache): SerializableLruOptions {
     noDeleteOnStaleGet: c.noDeleteOnStaleGet,
     ttlAutopurge: c.ttlAutopurge,
   };
+}
+
+function payloadCacheOptions(payload: ExecPayload): SerializableLruOptions | undefined {
+  return payload.op === 'init' ? payload.options : payload.cacheOptions;
+}
+
+function getCacheForPayload(namespace: string, payload: ExecPayload): AnyCache {
+  const existing = caches.get(namespace);
+  if (existing) return existing;
+  return getOrCreateCache(namespace, payloadCacheOptions(payload));
 }
 
 function assertOptionsCompatible(namespace: string, cache: AnyCache, options?: SerializableLruOptions): void {
@@ -95,14 +122,67 @@ function requireNonNullish(label: string, value: unknown): NonNullish {
   return value;
 }
 
+function buildSetOptions(opts: { ttl?: number; size?: number; noUpdateTTL?: boolean }):
+  | {
+      ttl?: number;
+      size?: number;
+      noUpdateTTL?: boolean;
+    }
+  | undefined {
+  const out: { ttl?: number; size?: number; noUpdateTTL?: boolean } = {};
+  if (opts.ttl !== undefined) out.ttl = opts.ttl;
+  if (opts.size !== undefined) out.size = opts.size;
+  if (opts.noUpdateTTL) out.noUpdateTTL = true;
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+function readEntrySize(cache: AnyCache, key: NonNullish): number | undefined {
+  const info = (
+    cache as unknown as {
+      info: (key: NonNullish) => LRUCache.Entry<NonNullish> | undefined;
+    }
+  ).info(key);
+  return typeof info?.size === 'number' ? info.size : undefined;
+}
+
+function getFetchNamespaceLocks(namespace: string): Map<NonNullish, FetchLock> {
+  let locks = fetchLocks.get(namespace);
+  if (!locks) {
+    locks = new Map();
+    fetchLocks.set(namespace, locks);
+  }
+  return locks;
+}
+
+function cleanupFetchNamespaceLocks(namespace: string): void {
+  if (fetchLocks.get(namespace)?.size === 0) fetchLocks.delete(namespace);
+}
+
+function releaseFetchLocksForWorker(workerId: number): void {
+  for (const [namespace, locks] of fetchLocks) {
+    for (const [key, lock] of locks) {
+      if (lock.ownerWorkerId === workerId) {
+        locks.delete(key);
+      }
+    }
+    cleanupFetchNamespaceLocks(namespace);
+  }
+}
+
 function buildCache(options: SerializableLruOptions, s: Stats): AnyCache {
-  return new LRUCache({
-    max: 1000,
+  const cacheOptions = {
     ...options,
     dispose: (_value: NonNullish, _key: NonNullish, reason: LRUCache.DisposeReason) => {
       if (reason === 'evict') s.evictions += 1;
     },
-  });
+  } as SerializableLruOptions & {
+    dispose: (_value: NonNullish, _key: NonNullish, reason: LRUCache.DisposeReason) => void;
+  };
+  const defaultedOptions =
+    cacheOptions.max === undefined && cacheOptions.maxSize === undefined && cacheOptions.ttl === undefined
+      ? { ...cacheOptions, max: 1000 }
+      : cacheOptions;
+  return new LRUCache(defaultedOptions as ConstructorParameters<typeof LRUCache>[0]);
 }
 
 export function getOrCreateCache(namespace: string, options?: SerializableLruOptions): AnyCache {
@@ -123,15 +203,24 @@ export function getOrCreateCache(namespace: string, options?: SerializableLruOpt
 // for op semantics; both `handleRequest` (IPC entry point) and the in-process
 // primary fast-path in `index.ts` call this. Avoids object/promise allocation
 // per call when no IPC is involved.
-export function dispatchOp(namespace: string, payload: ExecPayload): unknown {
+export function dispatchOp(namespace: string, payload: ExecPayload, context: DispatchContext = {}): unknown {
   switch (payload.op) {
     case 'init': {
       const isNew = !caches.has(namespace);
       const cache = getOrCreateCache(namespace, payload.options);
       return { namespace, isNew, max: cache.max };
     }
+    case 'healthCheck':
+      getCacheForPayload(namespace, payload);
+      return undefined;
+    case 'destroy': {
+      const cacheExisted = caches.delete(namespace);
+      const statsExisted = stats.delete(namespace);
+      const locksExisted = fetchLocks.delete(namespace);
+      return cacheExisted || statsExisted || locksExisted;
+    }
     case 'get': {
-      const cache = getOrCreateCache(namespace);
+      const cache = getCacheForPayload(namespace, payload);
       const value = cache.get(requireNonNullish('cache key', payload.key));
       const s = getStats(namespace);
       if (value !== undefined) s.hits += 1;
@@ -139,40 +228,44 @@ export function dispatchOp(namespace: string, payload: ExecPayload): unknown {
       return value;
     }
     case 'set': {
-      const cache = getOrCreateCache(namespace);
+      const cache = getCacheForPayload(namespace, payload);
       cache.set(
         requireNonNullish('cache key', payload.key),
         requireNonNullish('cache value', payload.value),
-        payload.ttl ? { ttl: payload.ttl } : undefined,
+        buildSetOptions({ ttl: payload.ttl, size: payload.size }),
       );
       getStats(namespace).sets += 1;
       return true;
     }
     case 'setIfAbsent': {
-      const cache = getOrCreateCache(namespace);
+      const cache = getCacheForPayload(namespace, payload);
       const key = requireNonNullish('cache key', payload.key);
       if (cache.has(key)) return false;
-      cache.set(key, requireNonNullish('cache value', payload.value), payload.ttl ? { ttl: payload.ttl } : undefined);
+      cache.set(
+        key,
+        requireNonNullish('cache value', payload.value),
+        buildSetOptions({ ttl: payload.ttl, size: payload.size }),
+      );
       getStats(namespace).sets += 1;
       return true;
     }
     case 'delete': {
-      const cache = getOrCreateCache(namespace);
+      const cache = getCacheForPayload(namespace, payload);
       const deleted = cache.delete(requireNonNullish('cache key', payload.key));
       if (deleted) getStats(namespace).deletes += 1;
       return deleted;
     }
     case 'has':
-      return getOrCreateCache(namespace).has(requireNonNullish('cache key', payload.key));
+      return getCacheForPayload(namespace, payload).has(requireNonNullish('cache key', payload.key));
     case 'peek':
-      return getOrCreateCache(namespace).peek(requireNonNullish('cache key', payload.key));
+      return getCacheForPayload(namespace, payload).peek(requireNonNullish('cache key', payload.key));
     case 'getRemainingTTL':
-      return getOrCreateCache(namespace).getRemainingTTL(requireNonNullish('cache key', payload.key));
+      return getCacheForPayload(namespace, payload).getRemainingTTL(requireNonNullish('cache key', payload.key));
     case 'clear':
-      getOrCreateCache(namespace).clear();
+      getCacheForPayload(namespace, payload).clear();
       return undefined;
     case 'mGet': {
-      const cache = getOrCreateCache(namespace);
+      const cache = getCacheForPayload(namespace, payload);
       const s = getStats(namespace);
       return payload.keys.map((key) => {
         const value = cache.get(requireNonNullish('cache key', key));
@@ -182,17 +275,23 @@ export function dispatchOp(namespace: string, payload: ExecPayload): unknown {
       });
     }
     case 'mSet': {
-      const cache = getOrCreateCache(namespace);
-      const setOpts = payload.ttl ? { ttl: payload.ttl } : undefined;
+      const cache = getCacheForPayload(namespace, payload);
       const s = getStats(namespace);
-      for (const [key, value] of payload.entries) {
-        cache.set(requireNonNullish('cache key', key), requireNonNullish('cache value', value), setOpts);
+      for (const [key, value, entryOpts] of payload.entries) {
+        cache.set(
+          requireNonNullish('cache key', key),
+          requireNonNullish('cache value', value),
+          buildSetOptions({
+            ttl: entryOpts?.ttl ?? payload.ttl,
+            size: entryOpts?.size ?? payload.size,
+          }),
+        );
         s.sets += 1;
       }
       return undefined;
     }
     case 'mDelete': {
-      const cache = getOrCreateCache(namespace);
+      const cache = getCacheForPayload(namespace, payload);
       const s = getStats(namespace);
       for (const key of payload.keys) {
         if (cache.delete(requireNonNullish('cache key', key))) s.deletes += 1;
@@ -200,15 +299,15 @@ export function dispatchOp(namespace: string, payload: ExecPayload): unknown {
       return undefined;
     }
     case 'keys':
-      return [...getOrCreateCache(namespace).keys()];
+      return [...getCacheForPayload(namespace, payload).keys()];
     case 'values':
-      return [...getOrCreateCache(namespace).values()];
+      return [...getCacheForPayload(namespace, payload).values()];
     case 'entries':
-      return [...getOrCreateCache(namespace).entries()];
+      return [...getCacheForPayload(namespace, payload).entries()];
     case 'dump':
-      return getOrCreateCache(namespace).dump();
+      return getCacheForPayload(namespace, payload).dump();
     case 'load': {
-      const cache = getOrCreateCache(namespace);
+      const cache = getCacheForPayload(namespace, payload);
       const entries = payload.entries.map(([key, entry]) => {
         const safeKey = requireNonNullish('cache key', key);
         const safeEntry = entry as { value?: unknown };
@@ -219,39 +318,81 @@ export function dispatchOp(namespace: string, payload: ExecPayload): unknown {
       return undefined;
     }
     case 'size':
-      return getOrCreateCache(namespace).size;
+      return getCacheForPayload(namespace, payload).size;
     case 'stats': {
-      const cache = getOrCreateCache(namespace);
+      const cache = getCacheForPayload(namespace, payload);
       const s = getStats(namespace);
       s.size = cache.size;
       return { ...s };
     }
     case 'purgeStale':
-      return getOrCreateCache(namespace).purgeStale();
+      return getCacheForPayload(namespace, payload).purgeStale();
     case 'incr':
     case 'decr': {
-      const cache = getOrCreateCache(namespace);
+      const cache = getCacheForPayload(namespace, payload);
       const key = requireNonNullish('cache key', payload.key);
       const existed = cache.has(key);
       const current = cache.get(key);
       const base = typeof current === 'number' ? current : 0;
       const delta = (payload.amount ?? 1) * (payload.op === 'decr' ? -1 : 1);
       const next = base + delta;
+      const size = payload.size ?? (existed ? readEntrySize(cache, key) : undefined);
       // Rate-limiter semantics: ttl on first write only. For pre-existing
       // keys, noUpdateTTL keeps the original expiration ticking — without
       // it, `cache.set(k, v)` would reset to the cache's default ttl (or
       // strip it entirely if the cache has none).
-      const setOpts: { ttl?: number; noUpdateTTL?: boolean } | undefined = existed
-        ? { noUpdateTTL: true }
-        : payload.ttl
-          ? { ttl: payload.ttl }
-          : undefined;
+      const setOpts = buildSetOptions(
+        existed
+          ? { size, noUpdateTTL: true }
+          : {
+              ttl: payload.ttl,
+              size,
+            },
+      );
       cache.set(key, next, setOpts);
       getStats(namespace).sets += 1;
       return next;
     }
+    case 'fetchClaim': {
+      const cache = getCacheForPayload(namespace, payload);
+      const key = requireNonNullish('cache key', payload.key);
+      const locks = getFetchNamespaceLocks(namespace);
+      if (!payload.forceRefresh) {
+        const value = cache.get(key);
+        if (value !== undefined) return { kind: 'value', value };
+        if (locks.has(key)) return { kind: 'follower' };
+      }
+      const token = `fetch-${++nextFetchToken}`;
+      locks.set(key, { token, ownerWorkerId: context.workerId });
+      return { kind: 'leader', token };
+    }
+    case 'fetchStore': {
+      const cache = getCacheForPayload(namespace, payload);
+      const key = requireNonNullish('cache key', payload.key);
+      const locks = fetchLocks.get(namespace);
+      const lock = locks?.get(key);
+      if (!lock || lock.token !== payload.token) return false;
+      cache.set(
+        key,
+        requireNonNullish('cache value', payload.value),
+        buildSetOptions({ ttl: payload.ttl, size: payload.size }),
+      );
+      locks?.delete(key);
+      cleanupFetchNamespaceLocks(namespace);
+      getStats(namespace).sets += 1;
+      return true;
+    }
+    case 'fetchAbort': {
+      const key = requireNonNullish('cache key', payload.key);
+      const locks = fetchLocks.get(namespace);
+      const lock = locks?.get(key);
+      if (!lock || lock.token !== payload.token) return false;
+      locks?.delete(key);
+      cleanupFetchNamespaceLocks(namespace);
+      return true;
+    }
     case 'max': {
-      const cache = getOrCreateCache(namespace);
+      const cache = getCacheForPayload(namespace, payload);
       if (typeof payload.value === 'number' && payload.value !== cache.max) {
         // lru-cache@11 has no setter for max — rebuild. Two correctness points:
         // (1) preserve every SerializableLruOptions field, not just ttl and
@@ -271,12 +412,12 @@ export function dispatchOp(namespace: string, payload: ExecPayload): unknown {
       return cache.max;
     }
     case 'ttl': {
-      const cache = getOrCreateCache(namespace);
+      const cache = getCacheForPayload(namespace, payload);
       if (typeof payload.value === 'number') (cache as unknown as { ttl: number }).ttl = payload.value;
       return (cache as unknown as { ttl: number }).ttl;
     }
     case 'allowStale': {
-      const cache = getOrCreateCache(namespace);
+      const cache = getCacheForPayload(namespace, payload);
       if (typeof payload.value === 'boolean') (cache as unknown as { allowStale: boolean }).allowStale = payload.value;
       return (cache as unknown as { allowStale: boolean }).allowStale;
     }
@@ -287,12 +428,12 @@ export function dispatchOp(namespace: string, payload: ExecPayload): unknown {
   }
 }
 
-export function handleRequest(request: Request): Response {
+export function handleRequest(request: Request, context: DispatchContext = {}): Response {
   if (typeof request !== 'object' || request === null) {
     return err(request, 'invalid request: not an object');
   }
   try {
-    return ok(request, dispatchOp(request.namespace, request));
+    return ok(request, dispatchOp(request.namespace, request, context));
   } catch (e) {
     return err(request, e);
   }
@@ -311,11 +452,17 @@ function err(request: unknown, cause: unknown): Response {
 
 // Caller must check `cluster.isPrimary` — this only runs on the primary.
 export function installClusterListener(): void {
+  if (clusterListenerInstalled) return;
+  clusterListenerInstalled = true;
+
+  cluster.on('exit', (worker: Worker) => {
+    releaseFetchLocksForWorker(worker.id);
+  });
   cluster.on('fork', (worker: Worker) => {
     worker.on('message', (raw: unknown) => {
       if (!isOurRequest(raw)) return;
       messagesDebug(`primary <- worker ${worker.id}`, raw);
-      const response = handleRequest(raw);
+      const response = handleRequest(raw, { workerId: worker.id });
       worker.send(response);
     });
   });

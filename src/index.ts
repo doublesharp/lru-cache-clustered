@@ -6,10 +6,25 @@ import { type SerializableLruOptions, type Stats } from './messages.js';
 
 if (cluster.isPrimary) installClusterListener();
 
+const FETCH_POLL_MS = 5;
+
 // lru-cache@11 constrains generic K and V to non-nullish; mirror that locally
 // so the registry's stored type lines up with the public getCache() return.
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type
 type NonNullish = {};
+
+type FetchClaimResult<T> = { kind: 'value'; value: T } | { kind: 'leader'; token: string } | { kind: 'follower' };
+
+export interface WriteOptions {
+  ttl?: number;
+  size?: number;
+}
+
+export type MSetEntry<K, V> = [K, V] | [K, V, WriteOptions];
+
+export interface FetchOptions extends WriteOptions {
+  forceRefresh?: boolean;
+}
 
 export interface LRUCacheClusterOptions extends SerializableLruOptions {
   namespace?: string;
@@ -26,14 +41,11 @@ export class LRUCacheForClustersAsPromised<K = string, V = unknown> {
   readonly timeout: number;
   readonly failsafe: 'resolve' | 'reject';
   readonly ready: Promise<void>;
-  readonly #lruOptions: SerializableLruOptions;
+  #lruOptions: SerializableLruOptions;
   readonly #client: IpcClient;
-  // Per-instance in-flight dedup for fetch(). Two `LRUCacheForClustersAsPromised`
-  // instances pointing at the same namespace each have their own #inFlight map,
-  // so concurrent fetches across separate instances will each invoke the
-  // fetcher — even within a single worker. Likewise, different workers don't
-  // share in-flight state. If at-most-once invocation across the cluster is
-  // required, the fetcher needs its own coordination.
+  // Per-instance in-flight dedup for fetch(). Concurrent callers within the
+  // same instance piggyback locally before the primary-side single-flight lock
+  // engages across instances and workers.
   readonly #inFlight = new Map<K, { promise: Promise<V> }>();
 
   constructor(options: LRUCacheClusterOptions & InternalOptions = {}) {
@@ -71,12 +83,16 @@ export class LRUCacheForClustersAsPromised<K = string, V = unknown> {
       noInit: true,
     });
     if (cluster.isWorker) {
-      await instance.#dispatch<unknown>({
+      await instance.#dispatchRequired<unknown>({
         op: 'init',
         options: instance.#lruOptions,
       });
     }
     return instance;
+  }
+
+  static bootstrap(): void {
+    if (cluster.isPrimary) installClusterListener();
   }
 
   static getAllCaches(): Map<string, LRUCache<NonNullish, NonNullish>> {
@@ -97,12 +113,13 @@ export class LRUCacheForClustersAsPromised<K = string, V = unknown> {
   get(key: K) {
     return this.#dispatch<V | undefined>({ op: 'get', key });
   }
-  set(key: K, value: V, opts?: { ttl?: number }) {
+  set(key: K, value: V, opts?: WriteOptions) {
     return this.#dispatch<boolean>({
       op: 'set',
       key,
       value,
       ttl: opts?.ttl,
+      size: opts?.size,
     });
   }
   delete(key: K) {
@@ -128,11 +145,16 @@ export class LRUCacheForClustersAsPromised<K = string, V = unknown> {
     });
     return new Map(pairs);
   }
-  mSet(entries: Iterable<[K, V]>, opts?: { ttl?: number }) {
+  mSet(entries: Iterable<MSetEntry<K, V>>, opts?: WriteOptions) {
     return this.#dispatch<void>({
       op: 'mSet',
-      entries: [...entries] as Array<[unknown, unknown]>,
+      entries: [...entries].map((entry) =>
+        entry.length === 3
+          ? ([entry[0], entry[1], entry[2]] as [unknown, unknown, WriteOptions])
+          : ([entry[0], entry[1]] as [unknown, unknown]),
+      ),
       ttl: opts?.ttl,
+      size: opts?.size,
     });
   }
   mDelete(keys: K[]) {
@@ -155,32 +177,39 @@ export class LRUCacheForClustersAsPromised<K = string, V = unknown> {
     return this.#dispatch<number>({ op: 'size' });
   }
 
-  incr(key: K, amount?: number, opts?: { ttl?: number }) {
-    return this.#dispatch<number>({ op: 'incr', key, amount, ttl: opts?.ttl });
+  incr(key: K, amount?: number, opts?: WriteOptions) {
+    return this.#dispatch<number>({ op: 'incr', key, amount, ttl: opts?.ttl, size: opts?.size });
   }
-  decr(key: K, amount?: number, opts?: { ttl?: number }) {
-    return this.#dispatch<number>({ op: 'decr', key, amount, ttl: opts?.ttl });
+  decr(key: K, amount?: number, opts?: WriteOptions) {
+    return this.#dispatch<number>({ op: 'decr', key, amount, ttl: opts?.ttl, size: opts?.size });
   }
 
-  allowStale(value?: boolean) {
-    return this.#dispatch<boolean>({ op: 'allowStale', value });
+  async allowStale(value?: boolean) {
+    const next = await this.#dispatch<boolean>({ op: 'allowStale', value });
+    this.#lruOptions.allowStale = next;
+    return next;
   }
-  max(value?: number) {
-    return this.#dispatch<number>({ op: 'max', value });
+  async max(value?: number) {
+    const next = await this.#dispatch<number>({ op: 'max', value });
+    this.#lruOptions.max = next;
+    return next;
   }
-  ttl(value?: number) {
-    return this.#dispatch<number>({ op: 'ttl', value });
+  async ttl(value?: number) {
+    const next = await this.#dispatch<number>({ op: 'ttl', value });
+    this.#lruOptions.ttl = next;
+    return next;
   }
 
   getRemainingTTL(key: K) {
     return this.#dispatch<number>({ op: 'getRemainingTTL', key });
   }
-  setIfAbsent(key: K, value: V, opts?: { ttl?: number }) {
+  setIfAbsent(key: K, value: V, opts?: WriteOptions) {
     return this.#dispatch<boolean>({
       op: 'setIfAbsent',
       key,
       value,
       ttl: opts?.ttl,
+      size: opts?.size,
     });
   }
   load(entries: Array<[K, LRUCache.Entry<V>]>) {
@@ -188,6 +217,13 @@ export class LRUCacheForClustersAsPromised<K = string, V = unknown> {
       op: 'load',
       entries: entries,
     });
+  }
+  destroy() {
+    this.#inFlight.clear();
+    return this.#dispatch<boolean>({ op: 'destroy' });
+  }
+  healthCheck() {
+    return this.#dispatchRequired<void>({ op: 'healthCheck' });
   }
   stats() {
     return this.#dispatch<Stats>({ op: 'stats' });
@@ -200,11 +236,7 @@ export class LRUCacheForClustersAsPromised<K = string, V = unknown> {
     for (const pair of all) yield pair;
   }
 
-  async fetch(
-    key: K,
-    fetcher: (key: K) => Promise<V> | V,
-    opts?: { ttl?: number; forceRefresh?: boolean },
-  ): Promise<V> {
+  async fetch(key: K, fetcher: (key: K) => Promise<V> | V, opts?: FetchOptions): Promise<V> {
     // forceRefresh bypasses BOTH the cached-value check and the existing
     // in-flight slot; piggybacking on a previous fetcher's result would
     // contradict the "force a fresh fetch" intent. The new fetch overwrites
@@ -223,15 +255,48 @@ export class LRUCacheForClustersAsPromised<K = string, V = unknown> {
         const cached = await this.get(key);
         if (cached !== undefined) return cached;
       }
+      let forceRefresh = opts?.forceRefresh === true;
 
-      const v = (await fetcher(key)) as V;
-      // A newer forceRefresh fetch may have replaced this slot. In that case
-      // keep the older caller's return value but don't let it overwrite the
-      // fresher cache contents.
-      if (this.#inFlight.get(key) === slot) {
-        await this.set(key, v, { ttl: opts?.ttl });
+      while (true) {
+        const claim = await this.#dispatchRequired<FetchClaimResult<V>>({
+          op: 'fetchClaim',
+          key,
+          forceRefresh,
+        });
+
+        if (claim.kind === 'value') return claim.value;
+        if (claim.kind === 'leader') {
+          try {
+            const v = (await fetcher(key)) as V;
+            await this.#dispatchRequired<boolean>({
+              op: 'fetchStore',
+              key,
+              token: claim.token,
+              value: v,
+              ttl: opts?.ttl,
+              size: opts?.size,
+            });
+            return v;
+          } catch (error) {
+            try {
+              await this.#dispatchRequired<boolean>({
+                op: 'fetchAbort',
+                key,
+                token: claim.token,
+              });
+            } catch {
+              // Ignore cleanup failures and preserve the fetcher's error.
+            }
+            throw error;
+          }
+        }
+
+        const observed = await this.peek(key);
+        if (observed !== undefined && !opts?.forceRefresh) return observed;
+
+        forceRefresh = false;
+        await new Promise((resolve) => setTimeout(resolve, FETCH_POLL_MS));
       }
-      return v;
     };
 
     slot = { promise: run() };
@@ -246,9 +311,18 @@ export class LRUCacheForClustersAsPromised<K = string, V = unknown> {
   }
 
   #dispatch<T>(payload: ExecPayload): Promise<T> {
+    return this.#dispatchWithFailsafe(payload, this.failsafe);
+  }
+
+  #dispatchRequired<T>(payload: ExecPayload): Promise<T> {
+    return this.#dispatchWithFailsafe(payload, 'reject');
+  }
+
+  #dispatchWithFailsafe<T>(payload: ExecPayload, failsafe: 'resolve' | 'reject'): Promise<T> {
+    const request = { ...payload, cacheOptions: this.#lruOptions } as ExecPayload;
     if (cluster.isPrimary) {
       try {
-        return Promise.resolve(dispatchOp(this.namespace, payload) as T);
+        return Promise.resolve(dispatchOp(this.namespace, request) as T);
       } catch (e) {
         return Promise.reject(e instanceof Error ? e : new Error(String(e)));
       }
@@ -257,17 +331,15 @@ export class LRUCacheForClustersAsPromised<K = string, V = unknown> {
       {
         namespace: this.namespace,
         timeout: this.timeout,
-        failsafe: this.failsafe,
+        failsafe,
       },
-      payload,
+      request,
     );
   }
 }
 
-// Short alias — equivalent to `LRUCacheForClustersAsPromised`, kept for
-// ergonomic imports. The long name remains the canonical export so v1.x
-// users find a familiar identifier.
-export { LRUCacheForClustersAsPromised as ClusterCache };
+// Short alias — equivalent to `LRUCacheForClustersAsPromised`.
+export { LRUCacheForClustersAsPromised as LRUCacheClustered };
 
 export { memoize, type MemoizeOptions } from './memoize.js';
 export { wrap, type Codec, type WrappedCache } from './codec.js';

@@ -46,7 +46,7 @@ function getStats(namespace: string): Stats {
   return s;
 }
 
-export function getOrCreateCache(namespace: string, options: SerializableLruOptions): AnyCache {
+export function getOrCreateCache(namespace: string, options?: SerializableLruOptions): AnyCache {
   let cache = caches.get(namespace);
   if (!cache) {
     const s = freshStats(namespace);
@@ -76,7 +76,7 @@ export function dispatchOp(namespace: string, payload: ExecPayload): unknown {
       return { namespace, isNew, max: cache.max };
     }
     case 'get': {
-      const cache = getOrCreateCache(namespace, {});
+      const cache = getOrCreateCache(namespace);
       const value = cache.get(k(payload.key));
       const s = getStats(namespace);
       if (value !== undefined) s.hits += 1;
@@ -84,35 +84,35 @@ export function dispatchOp(namespace: string, payload: ExecPayload): unknown {
       return value;
     }
     case 'set': {
-      const cache = getOrCreateCache(namespace, {});
+      const cache = getOrCreateCache(namespace);
       cache.set(k(payload.key), k(payload.value), payload.ttl ? { ttl: payload.ttl } : undefined);
       getStats(namespace).sets += 1;
       return true;
     }
     case 'setIfAbsent': {
-      const cache = getOrCreateCache(namespace, {});
+      const cache = getOrCreateCache(namespace);
       if (cache.has(k(payload.key))) return false;
       cache.set(k(payload.key), k(payload.value), payload.ttl ? { ttl: payload.ttl } : undefined);
       getStats(namespace).sets += 1;
       return true;
     }
     case 'delete': {
-      const cache = getOrCreateCache(namespace, {});
+      const cache = getOrCreateCache(namespace);
       const deleted = cache.delete(k(payload.key));
       if (deleted) getStats(namespace).deletes += 1;
       return deleted;
     }
     case 'has':
-      return getOrCreateCache(namespace, {}).has(k(payload.key));
+      return getOrCreateCache(namespace).has(k(payload.key));
     case 'peek':
-      return getOrCreateCache(namespace, {}).peek(k(payload.key));
+      return getOrCreateCache(namespace).peek(k(payload.key));
     case 'getRemainingTTL':
-      return getOrCreateCache(namespace, {}).getRemainingTTL(k(payload.key));
+      return getOrCreateCache(namespace).getRemainingTTL(k(payload.key));
     case 'clear':
-      getOrCreateCache(namespace, {}).clear();
+      getOrCreateCache(namespace).clear();
       return undefined;
     case 'mGet': {
-      const cache = getOrCreateCache(namespace, {});
+      const cache = getOrCreateCache(namespace);
       const s = getStats(namespace);
       return payload.keys.map((key) => {
         const value = cache.get(k(key));
@@ -122,7 +122,7 @@ export function dispatchOp(namespace: string, payload: ExecPayload): unknown {
       });
     }
     case 'mSet': {
-      const cache = getOrCreateCache(namespace, {});
+      const cache = getOrCreateCache(namespace);
       const setOpts = payload.ttl ? { ttl: payload.ttl } : undefined;
       const s = getStats(namespace);
       for (const [key, value] of payload.entries) {
@@ -132,7 +132,7 @@ export function dispatchOp(namespace: string, payload: ExecPayload): unknown {
       return undefined;
     }
     case 'mDelete': {
-      const cache = getOrCreateCache(namespace, {});
+      const cache = getOrCreateCache(namespace);
       const s = getStats(namespace);
       for (const key of payload.keys) {
         if (cache.delete(k(key))) s.deletes += 1;
@@ -140,31 +140,31 @@ export function dispatchOp(namespace: string, payload: ExecPayload): unknown {
       return undefined;
     }
     case 'keys':
-      return [...getOrCreateCache(namespace, {}).keys()];
+      return [...getOrCreateCache(namespace).keys()];
     case 'values':
-      return [...getOrCreateCache(namespace, {}).values()];
+      return [...getOrCreateCache(namespace).values()];
     case 'entries':
-      return [...getOrCreateCache(namespace, {}).entries()];
+      return [...getOrCreateCache(namespace).entries()];
     case 'dump':
-      return getOrCreateCache(namespace, {}).dump();
+      return getOrCreateCache(namespace).dump();
     case 'load': {
-      const cache = getOrCreateCache(namespace, {});
+      const cache = getOrCreateCache(namespace);
       cache.load(payload.entries as Array<[NonNullish, LRUCache.Entry<NonNullish>]>);
       return undefined;
     }
     case 'size':
-      return getOrCreateCache(namespace, {}).size;
+      return getOrCreateCache(namespace).size;
     case 'stats': {
-      const cache = getOrCreateCache(namespace, {});
+      const cache = getOrCreateCache(namespace);
       const s = getStats(namespace);
       s.size = cache.size;
       return { ...s };
     }
     case 'purgeStale':
-      return getOrCreateCache(namespace, {}).purgeStale();
+      return getOrCreateCache(namespace).purgeStale();
     case 'incr':
     case 'decr': {
-      const cache = getOrCreateCache(namespace, {});
+      const cache = getOrCreateCache(namespace);
       const existed = cache.has(k(payload.key));
       const current = cache.get(k(payload.key));
       const base = typeof current === 'number' ? current : 0;
@@ -184,7 +184,7 @@ export function dispatchOp(namespace: string, payload: ExecPayload): unknown {
       return next;
     }
     case 'max': {
-      const cache = getOrCreateCache(namespace, {});
+      const cache = getOrCreateCache(namespace);
       if (typeof payload.value === 'number' && payload.value !== cache.max) {
         // lru-cache@11 has no setter for max — rebuild the cache preserving
         // current entries (most recent first) and other tunables. Reuse the
@@ -206,12 +206,12 @@ export function dispatchOp(namespace: string, payload: ExecPayload): unknown {
       return cache.max;
     }
     case 'ttl': {
-      const cache = getOrCreateCache(namespace, {});
+      const cache = getOrCreateCache(namespace);
       if (typeof payload.value === 'number') (cache as unknown as { ttl: number }).ttl = payload.value;
       return (cache as unknown as { ttl: number }).ttl;
     }
     case 'allowStale': {
-      const cache = getOrCreateCache(namespace, {});
+      const cache = getOrCreateCache(namespace);
       if (typeof payload.value === 'boolean')
         (cache as unknown as { allowStale: boolean }).allowStale = payload.value;
       return (cache as unknown as { allowStale: boolean }).allowStale;

@@ -23,5 +23,8 @@ jobs:
       - run: pnpm run lint
       - run: pnpm run typecheck
       - run: pnpm test
+      - run: pnpm run knip
+      - run: pnpm run type-coverage
       - run: pnpm run build
+      - run: pnpm run size
       - run: pnpm publish --provenance --access public --no-git-checks

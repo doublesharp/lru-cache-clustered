@@ -75,29 +75,56 @@ All `LRUCache` constructor options from [`lru-cache@11`](https://github.com/isaa
 
 ### Instance
 
-| Method                      | Returns                           | Notes                                                        |
-| --------------------------- | --------------------------------- | ------------------------------------------------------------ |
-| `getCache()`                | `LRUCache \| undefined`           | Underlying `lru-cache` for this namespace. **Primary only**. |
-| `get(key)`                  | `Promise<V \| undefined>`         |                                                              |
-| `set(key, value, { ttl? })` | `Promise<boolean>`                |                                                              |
-| `delete(key)`               | `Promise<boolean>`                |                                                              |
-| `has(key)`                  | `Promise<boolean>`                |                                                              |
-| `peek(key)`                 | `Promise<V \| undefined>`         | Doesn't update LRU position.                                 |
-| `clear()`                   | `Promise<void>`                   |                                                              |
-| `purgeStale()`              | `Promise<boolean>`                | Removes expired entries.                                     |
-| `mGet(keys)`                | `Promise<Map<K, V \| undefined>>` |                                                              |
-| `mSet(entries, { ttl? })`   | `Promise<void>`                   | `entries: Iterable<[K, V]>`                                  |
-| `mDelete(keys)`             | `Promise<void>`                   |                                                              |
-| `keys()`                    | `Promise<K[]>`                    | MRU first.                                                   |
-| `values()`                  | `Promise<V[]>`                    | MRU first.                                                   |
-| `entries()`                 | `Promise<[K,V][]>`                | MRU first.                                                   |
-| `dump()`                    | `Promise<[K, Entry][]>`           | Serializable form.                                           |
-| `size()`                    | `Promise<number>`                 |                                                              |
-| `incr(key, amount?)`        | `Promise<number>`                 | Atomic on the primary; race-safe across workers.             |
-| `decr(key, amount?)`        | `Promise<number>`                 | Same.                                                        |
-| `max(value?)`               | `Promise<number>`                 | Getter and setter.                                           |
-| `ttl(value?)`               | `Promise<number>`                 | Getter and setter.                                           |
-| `allowStale(value?)`        | `Promise<boolean>`                | Getter and setter.                                           |
+| Method                                        | Returns                           | Notes                                                                                                                      |
+| --------------------------------------------- | --------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `getCache()`                                  | `LRUCache \| undefined`           | Underlying `lru-cache` for this namespace. **Primary only**.                                                               |
+| `get(key)`                                    | `Promise<V \| undefined>`         |                                                                                                                            |
+| `set(key, value, { ttl? })`                   | `Promise<boolean>`                |                                                                                                                            |
+| `setIfAbsent(key, value, { ttl? })`           | `Promise<boolean>`                | Atomic on the primary. `false` if the key already exists.                                                                  |
+| `delete(key)`                                 | `Promise<boolean>`                |                                                                                                                            |
+| `has(key)`                                    | `Promise<boolean>`                |                                                                                                                            |
+| `peek(key)`                                   | `Promise<V \| undefined>`         | Doesn't update LRU position.                                                                                               |
+| `getRemainingTTL(key)`                        | `Promise<number>`                 | Milliseconds until expiry, or the `lru-cache` no-TTL sentinel.                                                             |
+| `clear()`                                     | `Promise<void>`                   |                                                                                                                            |
+| `purgeStale()`                                | `Promise<boolean>`                | Removes expired entries.                                                                                                   |
+| `mGet(keys)`                                  | `Promise<Map<K, V \| undefined>>` |                                                                                                                            |
+| `mSet(entries, { ttl? })`                     | `Promise<void>`                   | `entries: Iterable<[K, V]>`                                                                                                |
+| `mDelete(keys)`                               | `Promise<void>`                   |                                                                                                                            |
+| `keys()`                                      | `Promise<K[]>`                    | MRU first.                                                                                                                 |
+| `values()`                                    | `Promise<V[]>`                    | MRU first.                                                                                                                 |
+| `entries()`                                   | `Promise<[K,V][]>`                | MRU first.                                                                                                                 |
+| `[Symbol.asyncIterator]()`                    | `AsyncIterableIterator<[K,V]>`    | `for await (const [k,v] of cache)`. Materializes the full set up front.                                                    |
+| `dump()`                                      | `Promise<[K, Entry][]>`           | Serializable form.                                                                                                         |
+| `load(entries)`                               | `Promise<void>`                   | Restores from a `dump()`.                                                                                                  |
+| `size()`                                      | `Promise<number>`                 |                                                                                                                            |
+| `stats()`                                     | `Promise<Stats>`                  | `{ hits, misses, sets, deletes, evictions, size, namespace }`.                                                             |
+| `incr(key, amount?, { ttl? })`                | `Promise<number>`                 | Atomic on the primary. `ttl` is set on the **first** write only — subsequent increments don't reset it (rate-limiter use). |
+| `decr(key, amount?, { ttl? })`                | `Promise<number>`                 | Same.                                                                                                                      |
+| `fetch(key, fetcher, { ttl?, forceRefresh })` | `Promise<V>`                      | Cache-aside with worker-local in-flight dedup. Concurrent calls for the same key invoke `fetcher` once.                    |
+| `max(value?)`                                 | `Promise<number>`                 | Getter and setter.                                                                                                         |
+| `ttl(value?)`                                 | `Promise<number>`                 | Getter and setter.                                                                                                         |
+| `allowStale(value?)`                          | `Promise<boolean>`                | Getter and setter.                                                                                                         |
+| `ready`                                       | `Promise<void>`                   | Resolves once worker init has reached the primary. Useful before the very first op.                                        |
+
+## `memoize` helper
+
+Wraps a function as cache-aside in one line. Concurrent invocations for the same key dedup to a single underlying call (within the same worker).
+
+```ts
+import { LRUCacheForClustersAsPromised, memoize } from 'lru-cache-for-clusters-as-promised';
+
+const cache = new LRUCacheForClustersAsPromised<string, User>({ namespace: 'users', ttl: 60_000 });
+
+const getUser = memoize(
+  cache,
+  (id: string) => fetchUserFromDB(id),
+  (id) => `user:${id}`,
+  { ttl: 60_000 },
+);
+
+await getUser('42'); // first call: hits DB
+await getUser('42'); // second call: cached
+```
 
 ## Migrating from v1.x
 

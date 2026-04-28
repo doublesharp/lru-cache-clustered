@@ -30,15 +30,15 @@ See README "Migrating from v1.x" for the full mapping.
 
 # 1.7.1 / 2021-03-25
 
-- Added `static getInstance(options)` to asynchronously retun an `LRUCacheForClustersAsPromised` once the underlyig `LRUCache` is guaranteed to exist.
+- Added `static getInstance(options)` to asynchronously return an `LRUCacheForClustersAsPromised` once the underlying `LRUCache` is guaranteed to exist.
 - Added `static getAllCaches()` to return all underlying `LRUCache` instances keyed by namespace. _Use only when `cluster.isMaster === true`._
 - Added `getCache()` to return underlying `LRUCache` instance. _Use only when `cluster.isMaster === true`._
-- Add test coverage via github actions
+- Added test coverage via GitHub Actions
 - Bug fixes for namespaces
 - Bug fixes for prune cron jobs
 - Refactoring for maintainability
 - Updated tests
-- Update dependencies
+- Updated dependencies
 
 # 1.7.0 / 2021-03-25
 
@@ -131,12 +131,12 @@ See README "Migrating from v1.x" for the full mapping.
 # 1.5.9 / 2017-05-06
 
 - Remove `npm-shrinkwrap.json`
-- Update depedencies
+- Update dependencies
 
 # 1.5.8 / 2017-03-03
 
 - Use Google ESLint config
-- Update depedencies
+- Update dependencies
 
 # 1.5.7 / 2017-02-02
 

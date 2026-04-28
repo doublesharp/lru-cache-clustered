@@ -51,6 +51,8 @@ if (cluster.isPrimary) {
 
 > **Naming.** `ClusterCache` is a short alias for `LRUCacheForClustersAsPromised`. Both refer to the same class — use whichever reads better in your code. The long name remains the canonical export for v1.x continuity.
 
+> **Startup ordering.** Import this package in the primary before `cluster.fork()`. The primary-side IPC listener is installed at module import time; if workers send cache requests before that import happens, they will time out.
+
 ## How it works
 
 <p align="center">
@@ -64,6 +66,15 @@ if (cluster.isPrimary) {
 
 Instances in different workers that share a `namespace` operate on the same primary-side cache. That's where the memory savings come from. Those instances should agree on cache options (`max`, `ttl`, `allowStale`, ...): reusing a namespace with conflicting options throws rather than silently keeping whichever process initialized it first.
 
+> **Initialization semantics.** In a worker, `new ClusterCache(...)` eagerly sends the `init` message, but `cache.ready` is ordering-only and intentionally swallows init failure. Use `await ClusterCache.getInstance(...)` when startup should fail fast if the primary cannot register the namespace.
+
+## Performance profile
+
+- **Primary mode** — operations dispatch directly to the local `lru-cache` instance.
+- **Worker mode** — every cache operation is an IPC round trip through the primary.
+- **Hot misses** — `fetch()` and `memoize()` collapse concurrent misses within one worker, but they do not dedupe across workers.
+- **Design tradeoff** — use this package when cross-worker sharing and single-copy memory matter more than per-call latency; use plain per-process `lru-cache` when your hottest path cannot afford the IPC hop.
+
 ## Options
 
 The serializable subset of [`lru-cache@11`](https://github.com/isaacs/node-lru-cache) constructor options passes through (`max`, `ttl`, `allowStale`, `updateAgeOnGet`, `updateAgeOnHas`, `noDeleteOnStaleGet`, `ttlAutopurge`). Plus:
@@ -74,6 +85,8 @@ The serializable subset of [`lru-cache@11`](https://github.com/isaacs/node-lru-c
 | `timeout`   | `number`                | `100`       | Worker IPC timeout in ms.                                                                                     |
 | `failsafe`  | `'resolve' \| 'reject'` | `'resolve'` | On worker IPC timeout: `'resolve'` resolves with `undefined`; `'reject'` rejects with `Error('IPC timeout')`. |
 
+Function-valued `lru-cache` options such as `dispose`, `disposeAfter`, `sizeCalculation`, or `fetchMethod` do not cross IPC and are not supported by this wrapper.
+
 > **`failsafe: 'resolve'` caveat.** On timeout, `'resolve'` returns `undefined` for _every_ op, regardless of declared return type. For `get` / `peek` that's natural; for `has` / `set` / `delete` / `incr` / `decr` / `size` it can surprise callers (`undefined + 1 === NaN`). Use `'reject'` if typed-shape correctness on timeout matters.
 
 > **Key/value contract.** Like `lru-cache@11`, keys and values must be non-nullish. Passing `null` or `undefined` rejects instead of relying on ambiguous cache semantics.
@@ -82,10 +95,10 @@ The serializable subset of [`lru-cache@11`](https://github.com/isaacs/node-lru-c
 
 ### Static
 
-| Method                              | Description                                                                                                       |
-| ----------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| `ClusterCache.getInstance(options)` | Async factory. In a worker, awaits the init message so the primary has registered the namespace before returning. |
-| `ClusterCache.getAllCaches()`       | Returns the `Map<namespace, LRUCache>` registry. **Primary only** — throws in workers.                            |
+| Method                              | Description                                                                                                                                                                      |
+| ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ClusterCache.getInstance(options)` | Async factory. In a worker, awaits the init message so the primary has registered the namespace before returning. Preferred when worker startup should fail fast on init errors. |
+| `ClusterCache.getAllCaches()`       | Returns the `Map<namespace, LRUCache>` registry. **Primary only** — throws in workers.                                                                                           |
 
 ### Core
 
@@ -116,7 +129,7 @@ The serializable subset of [`lru-cache@11`](https://github.com/isaacs/node-lru-c
 | `entries()`                | `Promise<[K, V][]>`             | MRU first.                                                       |
 | `[Symbol.asyncIterator]()` | `AsyncIterableIterator<[K, V]>` | `for await (const [k, v] of cache)` — materializes the full set. |
 | `dump()`                   | `Promise<[K, Entry][]>`         | Serializable snapshot.                                           |
-| `load(entries)`            | `Promise<void>`                 | Restores from a `dump()`.                                        |
+| `load(entries)`            | `Promise<void>`                 | Restores from a `dump()`, preserving per-entry TTL metadata.     |
 | `size()`                   | `Promise<number>`               |                                                                  |
 
 ### Counters & cache-aside
@@ -129,16 +142,16 @@ The serializable subset of [`lru-cache@11`](https://github.com/isaacs/node-lru-c
 
 ### Lifecycle, metrics, tunables
 
-| Method                 | Returns                 | Notes                                                                                   |
-| ---------------------- | ----------------------- | --------------------------------------------------------------------------------------- |
-| `getRemainingTTL(key)` | `Promise<number>`       | ms until expiry. `Infinity` for keys with no TTL; `0` for missing keys.                 |
-| `purgeStale()`         | `Promise<boolean>`      | Removes expired entries.                                                                |
-| `stats()`              | `Promise<Stats>`        | `{ hits, misses, sets, deletes, evictions, size, namespace }`.                          |
-| `getCache()`           | `LRUCache \| undefined` | Underlying `lru-cache` for this namespace. **Primary only**.                            |
-| `ready`                | `Promise<void>`         | Resolves once worker init has been dispatched. Useful for ordering before the first op. |
-| `max(value?)`          | `Promise<number>`       | Getter and setter.                                                                      |
-| `ttl(value?)`          | `Promise<number>`       | Getter and setter.                                                                      |
-| `allowStale(value?)`   | `Promise<boolean>`      | Getter and setter.                                                                      |
+| Method                 | Returns                 | Notes                                                                                                                        |
+| ---------------------- | ----------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `getRemainingTTL(key)` | `Promise<number>`       | ms until expiry. `Infinity` for keys with no TTL; `0` for missing keys.                                                      |
+| `purgeStale()`         | `Promise<boolean>`      | Removes expired entries.                                                                                                     |
+| `stats()`              | `Promise<Stats>`        | `{ hits, misses, sets, deletes, evictions, size, namespace }`.                                                               |
+| `getCache()`           | `LRUCache \| undefined` | Underlying `lru-cache` for this namespace. **Primary only**.                                                                 |
+| `ready`                | `Promise<void>`         | Resolves once worker init has been dispatched. Useful for ordering only; use `getInstance()` if init failures should reject. |
+| `max(value?)`          | `Promise<number>`       | Getter and setter. Setter preserves entries and remaining TTL metadata.                                                      |
+| `ttl(value?)`          | `Promise<number>`       | Getter and setter.                                                                                                           |
+| `allowStale(value?)`   | `Promise<boolean>`      | Getter and setter.                                                                                                           |
 
 ## `wrap` — codec / compression
 

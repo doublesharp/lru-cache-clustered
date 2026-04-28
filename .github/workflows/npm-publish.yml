@@ -16,9 +16,10 @@ jobs:
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
           registry-url: 'https://registry.npmjs.org'
           cache: 'pnpm'
+      - run: npm install -g npm@latest
       - run: pnpm install --frozen-lockfile
       - run: pnpm run lint
       - run: pnpm run typecheck
@@ -28,5 +29,5 @@ jobs:
       - run: pnpm run build
       - run: pnpm run size
       - run: pnpm run prepare:publish
-      - run: npm publish ./dist-publish/scoped --access public --provenance
-      - run: npm publish ./dist-publish/legacy --access public --provenance
+      - run: npm publish ./dist-publish/scoped --access public --provenance --ignore-scripts
+      - run: npm publish ./dist-publish/legacy --access public --provenance --ignore-scripts

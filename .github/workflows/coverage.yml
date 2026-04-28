@@ -17,7 +17,7 @@ concurrency:
 
 jobs:
   doublcov:
-    name: Doublcov
+    name: coverage (node 22)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -46,6 +46,13 @@ jobs:
 
       - name: Generate LCOV
         run: pnpm test:coverage
+
+      - name: Upload Codecov report
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./coverage/lcov.info
+          fail_ci_if_error: true
 
       - name: Generate Doublcov report
         uses: doublesharp/doublcov@v0
@@ -81,7 +88,7 @@ jobs:
           include-hidden-files: true
 
       - name: Prepare Pages artifact
-        if: github.event_name != 'pull_request' && hashFiles('coverage/report/index.html') != ''
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && hashFiles('coverage/report/index.html') != ''
         run: |
           mkdir -p pages/coverage
           cp -R coverage/report/. pages/coverage/
@@ -95,7 +102,7 @@ jobs:
           HTML
 
       - name: Upload Pages artifact
-        if: github.event_name != 'pull_request' && hashFiles('pages/coverage/index.html') != ''
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && hashFiles('pages/coverage/index.html') != ''
         uses: actions/upload-pages-artifact@v3
         with:
           path: pages
@@ -108,8 +115,10 @@ jobs:
             echo
             if [ "${{ github.event_name }}" = "pull_request" ]; then
               echo "Download and extract the \`doublcov-report\` artifact, then preview it with \`npx @0xdoublesharp/doublcov@0 open coverage/report\`."
-            else
+            elif [ "${{ github.ref }}" = "refs/heads/main" ]; then
               echo "This run also publishes the report to GitHub Pages."
+            else
+              echo "This branch run uploads the \`doublcov-report\` artifact. GitHub Pages deployment only runs from \`main\`."
             fi
             echo
             echo "History is restored from and saved to the \`doublcov-history-*\` Actions cache keys."
@@ -118,7 +127,7 @@ jobs:
   pages:
     name: Publish coverage page
     needs: doublcov
-    if: github.event_name != 'pull_request'
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment:
       name: github-pages

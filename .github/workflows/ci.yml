@@ -5,12 +5,14 @@ on:
   pull_request:
 
 jobs:
+  # Node 22 is exercised by the `coverage` job below; this matrix only adds
+  # cross-version coverage on the LTS lines we don't already cover.
   test:
     name: test (node ${{ matrix.node }})
     strategy:
       fail-fast: false
       matrix:
-        node: ['22', '24']
+        node: ['24']
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -23,7 +25,7 @@ jobs:
       - run: pnpm test
 
   coverage:
-    name: coverage
+    name: coverage (node 22)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

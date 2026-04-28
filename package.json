@@ -43,8 +43,8 @@
     "knip": "knip",
     "size": "size-limit",
     "type-coverage": "type-coverage --at-least 99",
-    "check": "pnpm lint && pnpm typecheck && pnpm test && pnpm knip && pnpm type-coverage",
-    "prepublishOnly": "pnpm build && pnpm test && pnpm lint && pnpm typecheck",
+    "check": "pnpm lint && pnpm typecheck && pnpm test && pnpm knip && pnpm type-coverage && pnpm build && pnpm size",
+    "prepublishOnly": "pnpm check",
     "prepare": "husky"
   },
   "lint-staged": {
@@ -82,8 +82,10 @@
   "author": "Justin Silver",
   "license": "MIT",
   "dependencies": {
-    "debug": "^4.4.3",
-    "lru-cache": "^11.3.5"
+    "debug": "^4.4.3"
+  },
+  "peerDependencies": {
+    "lru-cache": "^11"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
@@ -100,6 +102,7 @@
     "husky": "^9.1.7",
     "knip": "^6.7.0",
     "lint-staged": "^16.4.0",
+    "lru-cache": "^11.3.5",
     "prettier": "^3.8.3",
     "size-limit": "^12.1.0",
     "tsup": "^8.5.1",

@@ -11,16 +11,18 @@ A cluster-safe Promise wrapper around [`lru-cache`](https://www.npmjs.com/packag
 
 ## Install
 
+`lru-cache@11` is a peer dependency — install it alongside this package so you control the version.
+
 ```sh
-npm install lru-cache-for-clusters-as-promised
+npm install lru-cache-for-clusters-as-promised lru-cache
 ```
 
 ```sh
-pnpm add lru-cache-for-clusters-as-promised
+pnpm add lru-cache-for-clusters-as-promised lru-cache
 ```
 
 ```sh
-yarn add lru-cache-for-clusters-as-promised
+yarn add lru-cache-for-clusters-as-promised lru-cache
 ```
 
 ## Usage

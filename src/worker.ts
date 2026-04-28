@@ -21,7 +21,7 @@ type DistributiveOmit<T, K extends keyof never> = T extends unknown ? Omit<T, K>
 export type RequestPayload = DistributiveOmit<Request, 'id' | 'namespace' | 'source'>;
 
 export interface IpcClient {
-  sendToMaster: <T = unknown>(opts: SendOptions, payload: RequestPayload) => Promise<T>;
+  sendToPrimary: <T = unknown>(opts: SendOptions, payload: RequestPayload) => Promise<T>;
 }
 
 export function createIpcClient(proc: ProcessLike): IpcClient {
@@ -36,7 +36,7 @@ export function createIpcClient(proc: ProcessLike): IpcClient {
   });
 
   return {
-    sendToMaster<T>(opts: SendOptions, payload: RequestPayload): Promise<T> {
+    sendToPrimary<T>(opts: SendOptions, payload: RequestPayload): Promise<T> {
       const id = randomUUID();
       const request = { id, namespace: opts.namespace, source: SOURCE, ...payload } as Request;
 

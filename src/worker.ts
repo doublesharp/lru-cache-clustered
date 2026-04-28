@@ -1,8 +1,8 @@
 import { setTimeout, clearTimeout } from 'node:timers';
 import Debug from 'debug';
-import { SOURCE, deserializeError, type Request, type Response } from './messages.js';
+import { DEBUG_PREFIX, SOURCE, deserializeError, type Request, type Response } from './messages.js';
 
-const messagesDebug = Debug(`${SOURCE}-messages`);
+const messagesDebug = Debug(`${DEBUG_PREFIX}-messages`);
 
 // Monotonic per-process request ID. Each IpcClient gets its own counter via
 // closure, so client instances never collide. Avoids randomUUID's ~1µs cost

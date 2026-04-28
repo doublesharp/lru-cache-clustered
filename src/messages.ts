@@ -1,5 +1,13 @@
-export const SOURCE = 'lru-cache-for-clusters-as-promised' as const;
+// Short sentinel for IPC payload filtering. Each request and response carries
+// this string so the listener can ignore foreign messages on the shared cluster
+// IPC channel. Kept short (6 bytes) to minimize wire overhead — at 10k ops/sec
+// the savings versus a long package-name string add up to ~500KB/sec.
+export const SOURCE = 'lcfcap' as const;
 type Source = typeof SOURCE;
+
+// Debug namespace prefix kept as the full package name so the documented
+// `DEBUG=lru-cache-for-clusters-as-promised-*` env var continues to work.
+export const DEBUG_PREFIX = 'lru-cache-for-clusters-as-promised';
 
 type RequestBase = {
   id: string;

@@ -3,6 +3,7 @@ import type { Worker } from 'node:cluster';
 import Debug from 'debug';
 import { LRUCache } from 'lru-cache';
 import {
+  DEBUG_PREFIX,
   SOURCE,
   serializeError,
   type Request,
@@ -15,8 +16,8 @@ import {
 type DistributiveOmit<T, K extends keyof never> = T extends unknown ? Omit<T, K> : never;
 export type ExecPayload = DistributiveOmit<Request, 'id' | 'namespace' | 'source'>;
 
-const debug = Debug(`${SOURCE}-primary`);
-const messagesDebug = Debug(`${SOURCE}-messages`);
+const debug = Debug(`${DEBUG_PREFIX}-primary`);
+const messagesDebug = Debug(`${DEBUG_PREFIX}-messages`);
 
 // Public registry: namespace -> LRUCache. Keys/values constrained to non-nullish
 // per lru-cache@11 signature; we operate on `unknown` at the IPC boundary and

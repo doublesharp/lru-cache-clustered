@@ -81,9 +81,24 @@ function isOurResponse(value: unknown): value is Response {
   );
 }
 
-// Default singleton for the actual worker process (real `process` object).
-// Caller is expected to be a cluster worker, so process.send is defined.
-export const defaultClient: IpcClient = createIpcClient({
-  send: (msg) => process.send!(msg),
-  on: (event, cb) => process.on(event, cb),
-});
+// Lazy singleton for the actual worker process. Constructing the client
+// attaches a `process.on('message')` listener and captures `process.send`,
+// neither of which is meaningful in primary mode — so we defer creation
+// until a worker-side dispatch actually needs it.
+let cachedDefaultClient: IpcClient | undefined;
+
+export function getDefaultClient(): IpcClient {
+  if (!cachedDefaultClient) {
+    if (typeof process.send !== 'function') {
+      throw new Error(
+        'lru-cache-clustered: worker IPC client requested in a process without `process.send` (not a cluster worker).',
+      );
+    }
+    const send = process.send.bind(process);
+    cachedDefaultClient = createIpcClient({
+      send: (msg) => send(msg),
+      on: (event, cb) => process.on(event, cb),
+    });
+  }
+  return cachedDefaultClient;
+}

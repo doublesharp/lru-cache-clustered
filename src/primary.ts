@@ -472,12 +472,23 @@ export function installClusterListener(): void {
     releaseFetchLocksForWorker(worker.id);
   });
   cluster.on('fork', (worker: Worker) => {
-    worker.on('message', (raw: unknown) => {
-      if (!isOurRequest(raw)) return;
-      messagesDebug(`primary <- worker ${worker.id}`, raw);
-      const response = handleRequest(raw, { workerId: worker.id });
-      worker.send(response);
-    });
+    attachWorkerHandler(worker);
+  });
+  // Cover workers that already exist when the listener is installed late
+  // (e.g. bootstrap() called after some forks). cluster.on('fork') only
+  // fires for future workers, so without this those would never get a
+  // message handler and their IPC requests would silently time out.
+  for (const worker of Object.values(cluster.workers ?? {})) {
+    if (worker) attachWorkerHandler(worker);
+  }
+}
+
+function attachWorkerHandler(worker: Worker): void {
+  worker.on('message', (raw: unknown) => {
+    if (!isOurRequest(raw)) return;
+    messagesDebug(`primary <- worker ${worker.id}`, raw);
+    const response = handleRequest(raw, { workerId: worker.id });
+    worker.send(response);
   });
 }
 

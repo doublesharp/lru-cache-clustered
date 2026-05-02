@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createIpcClient } from '../src/worker.ts';
+import { createIpcClient, getDefaultClient } from '../src/worker.ts';
 import { SOURCE, type Response } from '../src/messages.ts';
 
 function makeFakeProcess() {
@@ -152,4 +152,39 @@ void test('sendToPrimary ignores response with unknown id', async () => {
   // Deliver a response with the wrong id; sendToPrimary should ignore it and time out.
   fake.deliver({ id: 'unknown-id', source: SOURCE, ok: true, value: 'ignored' });
   assert.equal(await p, undefined);
+});
+
+void test('getDefaultClient throws when process.send is unavailable (primary mode)', () => {
+  // eslint-disable-next-line @typescript-eslint/unbound-method
+  const originalSend = process.send;
+  // process.send is undefined in primary mode; tests run in primary, so this
+  // is the natural state, but be explicit.
+  (process as { send?: unknown }).send = undefined;
+  try {
+    assert.throws(() => getDefaultClient(), /not a cluster worker/);
+  } finally {
+    (process as { send?: unknown }).send = originalSend;
+  }
+});
+
+void test('getDefaultClient lazily creates and caches a real client when process.send exists', () => {
+  // eslint-disable-next-line @typescript-eslint/unbound-method
+  const originalSend = process.send;
+  const sent: unknown[] = [];
+  // Simulate worker mode: install a fake process.send long enough to construct.
+  (process as { send?: (msg: unknown) => boolean }).send = (msg: unknown) => {
+    sent.push(msg);
+    return true;
+  };
+  try {
+    const first = getDefaultClient();
+    const second = getDefaultClient();
+    assert.equal(first, second, 'should cache the singleton');
+    // Fire a no-response request to confirm send is wired up; let it time out.
+    void first.sendToPrimary({ namespace: 'n', timeout: 1, failsafe: 'resolve' }, { op: 'get', key: 'k' });
+    assert.equal(sent.length, 1);
+    assert.equal((sent[0] as { source: string }).source, SOURCE);
+  } finally {
+    (process as { send?: unknown }).send = originalSend;
+  }
 });

@@ -171,6 +171,84 @@ void test('cluster exit releases fetch locks owned by the exited worker', () => 
   assert.equal((next as { value: { kind: string } }).value.kind, 'leader');
 });
 
+void test('installClusterListener attaches handlers to workers that already exist', () => {
+  // Reset the install guard so this test can re-run installClusterListener
+  // and exercise the existing-workers branch (cluster.on('fork') only fires
+  // for future workers, so without iterating cluster.workers, late bootstraps
+  // would orphan already-running workers).
+  const STATE_KEY = Symbol.for('lru-cache-clustered.primary');
+  const state = (globalThis as Record<PropertyKey, unknown>)[STATE_KEY] as {
+    clusterListenerInstalled: boolean;
+  };
+  state.clusterListenerInstalled = false;
+
+  const messageHandlers: Array<(raw: unknown) => void> = [];
+  const sentResponses: unknown[] = [];
+  const fakeWorker = {
+    id: 9001,
+    on: (event: string, cb: (raw: unknown) => void) => {
+      if (event === 'message') messageHandlers.push(cb);
+    },
+    send: (msg: unknown) => sentResponses.push(msg),
+  };
+
+  const originalWorkers = cluster.workers;
+  // cluster.workers is a Record<string, Worker | undefined>; populate with a fake
+  // before calling installClusterListener, then restore.
+  (cluster as unknown as { workers: Record<string, unknown> }).workers = {
+    [String(fakeWorker.id)]: fakeWorker,
+  };
+
+  try {
+    installClusterListener();
+
+    assert.equal(messageHandlers.length, 1, 'existing worker should get exactly one message handler');
+
+    caches.clear();
+    const request = {
+      id: 'late-1',
+      namespace: 'late-bootstrap',
+      source: SOURCE,
+      cacheOptions: { max: 3 },
+      op: 'set',
+      key: 'k',
+      value: 'v',
+    } as Request;
+    messageHandlers[0]!(request);
+
+    assert.equal(sentResponses.length, 1);
+    assert.equal((sentResponses[0] as { ok: boolean }).ok, true);
+
+    // Non-matching messages are filtered out and never reach handleRequest.
+    messageHandlers[0]!({ not: 'ours' });
+    assert.equal(sentResponses.length, 1);
+  } finally {
+    (cluster as unknown as { workers: Record<string, unknown> | undefined }).workers = originalWorkers;
+  }
+});
+
+void test('installClusterListener tolerates undefined cluster.workers entries and missing registry', () => {
+  const STATE_KEY = Symbol.for('lru-cache-clustered.primary');
+  const state = (globalThis as Record<PropertyKey, unknown>)[STATE_KEY] as {
+    clusterListenerInstalled: boolean;
+  };
+  const originalWorkers = cluster.workers;
+
+  try {
+    // cluster.workers can have undefined entries for disconnected slots.
+    state.clusterListenerInstalled = false;
+    (cluster as unknown as { workers: Record<string, unknown> }).workers = { '1': undefined };
+    assert.doesNotThrow(() => installClusterListener());
+
+    // cluster.workers can also be undefined entirely (off-cluster process).
+    state.clusterListenerInstalled = false;
+    (cluster as unknown as { workers: Record<string, unknown> | undefined }).workers = undefined;
+    assert.doesNotThrow(() => installClusterListener());
+  } finally {
+    (cluster as unknown as { workers: Record<string, unknown> | undefined }).workers = originalWorkers;
+  }
+});
+
 void test('handleRequest CRUD ops', () => {
   caches.clear();
   const ns = 'crud';

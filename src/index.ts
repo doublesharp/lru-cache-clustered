@@ -1,7 +1,7 @@
 import cluster from 'node:cluster';
 import { LRUCache } from 'lru-cache';
 import { caches, dispatchOp, getOrCreateCache, installClusterListener, type ExecPayload } from './primary.js';
-import { defaultClient, type IpcClient } from './worker.js';
+import { getDefaultClient } from './worker.js';
 import { type SerializableLruOptions, type Stats } from './messages.js';
 
 if (cluster.isPrimary) installClusterListener();
@@ -42,7 +42,6 @@ export class LRUCacheForClustersAsPromised<K = string, V = unknown> {
   readonly failsafe: 'resolve' | 'reject';
   readonly ready: Promise<void>;
   #lruOptions: SerializableLruOptions;
-  readonly #client: IpcClient;
   // Per-instance in-flight dedup for fetch(). Concurrent callers within the
   // same instance piggyback locally before the primary-side single-flight lock
   // engages across instances and workers.
@@ -58,7 +57,6 @@ export class LRUCacheForClustersAsPromised<K = string, V = unknown> {
     void _f;
     void _ni;
     this.#lruOptions = lruOpts;
-    this.#client = defaultClient;
 
     if (cluster.isPrimary) {
       getOrCreateCache(this.namespace, this.#lruOptions);
@@ -330,7 +328,7 @@ export class LRUCacheForClustersAsPromised<K = string, V = unknown> {
         return Promise.reject(e instanceof Error ? e : new Error(String(e)));
       }
     }
-    return this.#client.sendToPrimary<T>(
+    return getDefaultClient().sendToPrimary<T>(
       {
         namespace: this.namespace,
         timeout: this.timeout,

@@ -15,8 +15,9 @@
 ## Features and infrastructure
 
 - Canonical package name is now `@0xdoublesharp/lru-cache-clustered`; `lru-cache-for-clusters-as-promised` is published from the same build at the same version
+- Added `LRUCacheClustered` short alias for `LRUCacheForClustersAsPromised` (both are exported)
 - Repository moved to `github.com/doublesharp/lru-cache-clustered`
-- Publish workflow builds once, prepares scoped and legacy package directories, and publishes both at the same version with npm provenance via GitHub Actions OIDC
+- Publish workflow (`scripts/prepare-publish.mjs` + `.github/workflows/npm-publish.yml`) builds once, prepares scoped and legacy package directories, and publishes both at the same version with npm provenance via GitHub Actions OIDC, triggered by `v*` tags
 - Publish prep validates required build artifacts before creating package directories
 - Scoped and legacy package copies share primary state in one process to avoid duplicate IPC listeners during migration
 - Dual ESM + CJS publish via `package.json` `exports`
@@ -25,11 +26,17 @@
 - Added `destroy()` to tear down namespace caches, stats, and fetch coordination state on the primary
 - Added explicit startup controls via `LRUCacheClustered.bootstrap()` and `cache.healthCheck()`
 - Added size-bounded cache support (`maxSize`, `maxEntrySize`, and `size` on write paths)
-- `fetch()` now uses primary-side single-flight coordination across workers; `memoize()` delegates to it
+- `fetch()` now uses primary-side single-flight coordination across workers; `memoize()` is exported as a top-level helper that delegates to it
+- Added `wrap()` for transparent encode/decode of cached values (gzip, MessagePack, custom symmetric codecs)
+- Structured error transport over IPC: rejected promises carry `name`, `message`, `code`, `stack`, and the `cause` chain
 - Dropped runtime deps: `cron`, `uuid` — request IDs use a per-process monotonic counter
 - pnpm for development; node:test + c8 for tests/coverage; tsup + tsc for build
+- husky `pre-commit` and `pre-push` hooks; lint-staged on staged files
 - 100% line/statement/function coverage
-- CI: Node 24 test workflow plus Node 22 coverage workflow for Codecov, Doublcov HTML artifacts, and GitHub Pages coverage publishing from `main`
+- Property-based fuzz tests for cache, IPC, and worker layers
+- CI: Node 24 test workflow, Node 22 coverage workflow for Codecov, Doublcov HTML artifacts, and GitHub Pages coverage publishing from `main`, plus a Quality workflow running lint, typecheck, knip, type-coverage, build, and size-limit
+- New `assets/`: logo (`LRUCacheClustered.png`) and topology SVG diagram
+- New `examples/`: six runnable clustered server examples (users / memoize, rate-limit / incr, sessions, idempotency / setIfAbsent, compressed documents / wrap, multilayer LRU + Redis)
 - `incr` / `decr` retained (race-safe across workers)
 - `failsafe` and `timeout` retained for worker IPC
 

@@ -215,11 +215,15 @@ Function-valued `lru-cache` options such as `dispose`, `disposeAfter`, `sizeCalc
 import { gzipSync, gunzipSync } from 'node:zlib';
 import { LRUCacheClustered, wrap } from '@0xdoublesharp/lru-cache-clustered';
 
-const inner = new LRUCacheClustered<string, Buffer>({ namespace: 'big-blobs', max: 1000 });
+// In worker mode, values cross cluster IPC, which serializes via JSON and
+// does not preserve `Buffer` identity (Buffers come back as
+// `{ type: 'Buffer', data: number[] }` in workers). Encode to a string
+// (e.g. base64) to keep the wire format Buffer-safe across workers.
+const inner = new LRUCacheClustered<string, string>({ namespace: 'big-blobs', max: 1000 });
 
 const cache = wrap(inner, {
-  encode: (v: unknown) => gzipSync(Buffer.from(JSON.stringify(v), 'utf8')),
-  decode: (raw: Buffer) => JSON.parse(gunzipSync(raw).toString('utf8')),
+  encode: (v: unknown) => gzipSync(Buffer.from(JSON.stringify(v), 'utf8')).toString('base64'),
+  decode: (raw: string) => JSON.parse(gunzipSync(Buffer.from(raw, 'base64')).toString('utf8')),
 });
 
 await cache.set('user:42', { id: 42, name: 'ada' });
@@ -229,6 +233,8 @@ await cache.get('user:42'); // decoded back to { id: 42, name: 'ada' }
 `encode` and `decode` may be sync or async. The wrapped surface covers value-touching ops (`get`, `set`, `setIfAbsent`, `peek`, `mGet`, `mSet`, `values`, `entries`, async iteration, `fetch`) plus the lifecycle and metric pass-throughs (`has`, `delete`, `keys`, `size`, `clear`, `destroy`, `healthCheck`, `purgeStale`, `getRemainingTTL`, `stats`).
 
 `incr` / `decr` and `dump` / `load` are not wrapped — they speak in numbers or the raw stored form. Reach them via `wrapped.cache` if you need them.
+
+> **Buffer-typed values.** Cluster IPC serializes through JSON, which doesn't preserve `Buffer`. If a codec stores `Buffer` directly, in worker mode the decoded side will receive `{ type: 'Buffer', data: number[] }` and most binary APIs will reject it. Encode to a string (base64, hex) — or rehydrate inside `decode` — when the wrapped cache is read from workers. Primary-only use is unaffected.
 
 ## `memoize` helper
 

@@ -69,17 +69,19 @@ function startPrimary(): void {
 }
 
 async function startWorker(): Promise<void> {
-  const rawCache = await LRUCacheClustered.getInstance<string, Buffer>({
+  // Worker IPC serializes via JSON, which doesn't preserve Buffer identity
+  // (Buffers come back as `{ type: 'Buffer', data: number[] }` in workers).
+  // Encoding to a base64 string keeps the wire format Buffer-safe across
+  // worker boundaries while still letting the primary store a compact form.
+  const rawCache = await LRUCacheClustered.getInstance<string, string>({
     namespace: 'example-compressed-documents',
     max: 1_000,
     ttl: DOCUMENT_TTL_MS,
   });
 
-  // The underlying clustered cache stores compressed Buffers on the primary.
-  // wrap() lets handlers work with decoded JSON objects instead.
   const cache = wrap(rawCache, {
-    encode: (value: DocumentRecord) => gzipSync(Buffer.from(JSON.stringify(value), 'utf8')),
-    decode: (raw: Buffer) => JSON.parse(gunzipSync(raw).toString('utf8')) as DocumentRecord,
+    encode: (value: DocumentRecord) => gzipSync(Buffer.from(JSON.stringify(value), 'utf8')).toString('base64'),
+    decode: (raw: string) => JSON.parse(gunzipSync(Buffer.from(raw, 'base64')).toString('utf8')) as DocumentRecord,
   });
 
   const server = createServer((req, res) => {
@@ -137,11 +139,11 @@ async function startWorker(): Promise<void> {
           };
 
           await cache.set(key, record, { ttl: DOCUMENT_TTL_MS });
-          // Reading through rawCache shows the actual compressed payload size
-          // stored in the primary process.
+          // Reading through rawCache shows the actual stored payload (a
+          // base64-encoded gzip string on the primary).
           const raw = await rawCache.get(key);
           const jsonBytes = Buffer.byteLength(JSON.stringify(record), 'utf8');
-          const storedBytes = raw?.length ?? 0;
+          const storedBytes = raw ? Buffer.byteLength(raw, 'utf8') : 0;
 
           writeJson(res, 200, {
             servedBy: { pid: process.pid, workerId: cluster.worker?.id },

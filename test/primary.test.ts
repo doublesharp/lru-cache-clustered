@@ -189,6 +189,7 @@ void test('installClusterListener attaches handlers to workers that already exis
     on: (event: string, cb: (raw: unknown) => void) => {
       if (event === 'message') messageHandlers.push(cb);
     },
+    isConnected: () => true,
     send: (msg: unknown) => sentResponses.push(msg),
   };
 
@@ -222,6 +223,133 @@ void test('installClusterListener attaches handlers to workers that already exis
     // Non-matching messages are filtered out and never reach handleRequest.
     messageHandlers[0]!({ not: 'ours' });
     assert.equal(sentResponses.length, 1);
+  } finally {
+    (cluster as unknown as { workers: Record<string, unknown> | undefined }).workers = originalWorkers;
+  }
+});
+
+void test('worker message handler skips send when worker is no longer connected', () => {
+  const STATE_KEY = Symbol.for('lru-cache-clustered.primary');
+  const state = (globalThis as Record<PropertyKey, unknown>)[STATE_KEY] as {
+    clusterListenerInstalled: boolean;
+  };
+  state.clusterListenerInstalled = false;
+
+  const messageHandlers: Array<(raw: unknown) => void> = [];
+  const sentResponses: unknown[] = [];
+  const fakeWorker = {
+    id: 9101,
+    on: (event: string, cb: (raw: unknown) => void) => {
+      if (event === 'message') messageHandlers.push(cb);
+    },
+    isConnected: () => false,
+    send: (msg: unknown) => sentResponses.push(msg),
+  };
+
+  const originalWorkers = cluster.workers;
+  (cluster as unknown as { workers: Record<string, unknown> }).workers = {
+    [String(fakeWorker.id)]: fakeWorker,
+  };
+
+  try {
+    installClusterListener();
+    caches.clear();
+    messageHandlers[0]!({
+      id: 'late-discon',
+      namespace: 'late-bootstrap-2',
+      source: SOURCE,
+      cacheOptions: { max: 3 },
+      op: 'set',
+      key: 'k',
+      value: 'v',
+    });
+    assert.equal(sentResponses.length, 0, 'send must be skipped for disconnected workers');
+  } finally {
+    (cluster as unknown as { workers: Record<string, unknown> | undefined }).workers = originalWorkers;
+  }
+});
+
+void test('worker message handler swallows send() throws (e.g. channel closed mid-flight)', () => {
+  const STATE_KEY = Symbol.for('lru-cache-clustered.primary');
+  const state = (globalThis as Record<PropertyKey, unknown>)[STATE_KEY] as {
+    clusterListenerInstalled: boolean;
+  };
+  state.clusterListenerInstalled = false;
+
+  const messageHandlers: Array<(raw: unknown) => void> = [];
+  const fakeWorker = {
+    id: 9102,
+    on: (event: string, cb: (raw: unknown) => void) => {
+      if (event === 'message') messageHandlers.push(cb);
+    },
+    isConnected: () => true,
+    send: () => {
+      throw new Error('channel closed');
+    },
+  };
+
+  const originalWorkers = cluster.workers;
+  (cluster as unknown as { workers: Record<string, unknown> }).workers = {
+    [String(fakeWorker.id)]: fakeWorker,
+  };
+
+  try {
+    installClusterListener();
+    caches.clear();
+    // Should not throw out of the listener even though send() does.
+    assert.doesNotThrow(() => {
+      messageHandlers[0]!({
+        id: 'late-throw',
+        namespace: 'late-bootstrap-3',
+        source: SOURCE,
+        cacheOptions: { max: 3 },
+        op: 'set',
+        key: 'k',
+        value: 'v',
+      });
+    });
+  } finally {
+    (cluster as unknown as { workers: Record<string, unknown> | undefined }).workers = originalWorkers;
+  }
+});
+
+void test('isOurRequest filters out messages with non-string namespace', () => {
+  const STATE_KEY = Symbol.for('lru-cache-clustered.primary');
+  const state = (globalThis as Record<PropertyKey, unknown>)[STATE_KEY] as {
+    clusterListenerInstalled: boolean;
+  };
+  state.clusterListenerInstalled = false;
+
+  const messageHandlers: Array<(raw: unknown) => void> = [];
+  const sentResponses: unknown[] = [];
+  const fakeWorker = {
+    id: 9103,
+    on: (event: string, cb: (raw: unknown) => void) => {
+      if (event === 'message') messageHandlers.push(cb);
+    },
+    isConnected: () => true,
+    send: (msg: unknown) => sentResponses.push(msg),
+  };
+
+  const originalWorkers = cluster.workers;
+  (cluster as unknown as { workers: Record<string, unknown> }).workers = {
+    [String(fakeWorker.id)]: fakeWorker,
+  };
+
+  try {
+    installClusterListener();
+    const cachesBefore = caches.size;
+    // Malformed message: source and id valid, op present, but namespace is undefined.
+    // Without the typeof-string guard this would call dispatchOp with namespace=undefined
+    // and pollute the registry under that key.
+    messageHandlers[0]!({
+      id: 'malformed',
+      source: SOURCE,
+      op: 'init',
+      options: { max: 3 },
+    });
+    assert.equal(sentResponses.length, 0, 'malformed request must be filtered out');
+    assert.equal(caches.size, cachesBefore, 'registry must not gain an undefined key');
   } finally {
     (cluster as unknown as { workers: Record<string, unknown> | undefined }).workers = originalWorkers;
   }

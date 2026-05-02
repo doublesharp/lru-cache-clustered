@@ -5,10 +5,13 @@ import { LRUCacheForClustersAsPromised, wrap } from '../../src/index.ts';
 
 if (!cluster.isWorker) throw new Error('worker-harness loaded outside a worker');
 
+/* eslint-disable @typescript-eslint/no-empty-object-type */
+// V is `{}` (non-nullish) to match the public class generic constraint.
 const gzipJsonCodec = {
-  encode: (value: unknown) => gzipSync(Buffer.from(JSON.stringify(value), 'utf8')),
-  decode: (raw: Buffer) => JSON.parse(gunzipSync(raw).toString('utf8')) as unknown,
+  encode: (value: {}) => gzipSync(Buffer.from(JSON.stringify(value), 'utf8')),
+  decode: (raw: Buffer) => JSON.parse(gunzipSync(raw).toString('utf8')) as {},
 };
+/* eslint-enable @typescript-eslint/no-empty-object-type */
 
 type CommandMessage = {
   kind?: unknown;
@@ -40,6 +43,9 @@ function serializeError(error: unknown) {
   };
 }
 
+// `{}` is the public generic constraint on V (matches lru-cache@11). Disabled
+// for the whole switch since several cases coerce raw IPC payloads through.
+/* eslint-disable @typescript-eslint/no-empty-object-type */
 async function handleCommand(cmd: string, args: unknown): Promise<unknown> {
   switch (cmd) {
     case 'set': {
@@ -49,8 +55,10 @@ async function handleCommand(cmd: string, args: unknown): Promise<unknown> {
         value: unknown;
         ttl?: number;
       };
-      const cache = await LRUCacheForClustersAsPromised.getInstance<string, unknown>(options);
-      return cache.set(key, value, ttl !== undefined ? { ttl } : undefined);
+      const cache = await LRUCacheForClustersAsPromised.getInstance<string, {}>(options);
+      // value arrives over IPC as `unknown`; the runtime guard rejects null
+      // and undefined, so cast to {} to satisfy the public generic constraint.
+      return cache.set(key, value as {}, ttl !== undefined ? { ttl } : undefined);
     }
 
     case 'get': {
@@ -58,7 +66,7 @@ async function handleCommand(cmd: string, args: unknown): Promise<unknown> {
         options: ConstructorParameters<typeof LRUCacheForClustersAsPromised>[0];
         key: string;
       };
-      const cache = await LRUCacheForClustersAsPromised.getInstance<string, unknown>(options);
+      const cache = await LRUCacheForClustersAsPromised.getInstance<string, {}>(options);
       return cache.get(key);
     }
 
@@ -86,7 +94,7 @@ async function handleCommand(cmd: string, args: unknown): Promise<unknown> {
       };
       const cache = await LRUCacheForClustersAsPromised.getInstance<string, Buffer>(options);
       const wrapped = wrap(cache, gzipJsonCodec);
-      return wrapped.set(key, value, ttl !== undefined ? { ttl } : undefined);
+      return wrapped.set(key, value as {}, ttl !== undefined ? { ttl } : undefined);
     }
 
     case 'wrappedGet': {
@@ -132,7 +140,7 @@ async function handleCommand(cmd: string, args: unknown): Promise<unknown> {
         options: ConstructorParameters<typeof LRUCacheForClustersAsPromised>[0];
         key: string;
       };
-      const cache = await LRUCacheForClustersAsPromised.getInstance<string, unknown>(options);
+      const cache = await LRUCacheForClustersAsPromised.getInstance<string, {}>(options);
       try {
         const value = await cache.get(key);
         return { status: 'resolved', value };
@@ -149,6 +157,7 @@ async function handleCommand(cmd: string, args: unknown): Promise<unknown> {
       throw new Error(`unknown worker command: ${cmd}`);
   }
 }
+/* eslint-enable @typescript-eslint/no-empty-object-type */
 
 process.on('message', (raw: unknown) => {
   if (!isCommandMessage(raw)) return;

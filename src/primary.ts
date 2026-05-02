@@ -488,7 +488,16 @@ function attachWorkerHandler(worker: Worker): void {
     if (!isOurRequest(raw)) return;
     messagesDebug(`primary <- worker ${worker.id}`, raw);
     const response = handleRequest(raw, { workerId: worker.id });
-    worker.send(response);
+    // The worker can disconnect between sending a request and us sending the
+    // response. send() in that window throws synchronously; left unhandled,
+    // it would propagate out of this listener and crash the primary, taking
+    // every other worker with it.
+    if (!worker.isConnected()) return;
+    try {
+      worker.send(response);
+    } catch (err) {
+      debug(`worker ${worker.id} send failed (likely disconnected): %s`, err);
+    }
   });
 }
 
@@ -498,6 +507,7 @@ function isOurRequest(value: unknown): value is Request {
     value !== null &&
     (value as { source?: unknown }).source === SOURCE &&
     typeof (value as { id?: unknown }).id === 'string' &&
+    typeof (value as { namespace?: unknown }).namespace === 'string' &&
     typeof (value as { op?: unknown }).op === 'string'
   );
 }

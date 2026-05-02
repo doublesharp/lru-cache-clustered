@@ -16,7 +16,8 @@ export interface Codec<V, U> {
 // deliberately omit `incr`/`decr` (numeric ops that would not survive most
 // codecs) and `dump`/`load` (which speak the raw stored form). Reach those
 // via `wrapped.cache` when needed.
-export interface WrappedCache<K, V> {
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type
+export interface WrappedCache<K extends {}, V extends {}> {
   readonly cache: LRUCacheForClustersAsPromised<K, never>;
   readonly namespace: string;
   readonly ready: Promise<void>;
@@ -49,7 +50,7 @@ export interface WrappedCache<K, V> {
 }
 
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type
-export function wrap<K, V, U extends {}>(
+export function wrap<K extends {}, V extends {}, U extends {}>(
   cache: LRUCacheForClustersAsPromised<K, U>,
   codec: Codec<V, U>,
 ): WrappedCache<K, V> {

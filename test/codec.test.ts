@@ -5,11 +5,15 @@ import { LRUCacheForClustersAsPromised } from '../src/index.ts';
 import { wrap, type Codec } from '../src/codec.ts';
 import { caches } from '../src/primary.ts';
 
-// JSON+gzip codec — exercises the realistic compression use case.
-const gzipJsonCodec: Codec<unknown, Buffer> = {
-  encode: (value) => gzipSync(Buffer.from(JSON.stringify(value), 'utf8')),
-  decode: (raw) => JSON.parse(gunzipSync(raw).toString('utf8')) as unknown,
+/* eslint-disable @typescript-eslint/no-empty-object-type */
+// JSON+gzip codec, exercises the realistic compression use case.
+// V is typed as `{}` (non-nullish) to match the lru-cache@11 generic
+// constraint the public class now mirrors.
+const gzipJsonCodec: Codec<{}, Buffer> = {
+  encode: (value: {}) => gzipSync(Buffer.from(JSON.stringify(value), 'utf8')),
+  decode: (raw: Buffer) => JSON.parse(gunzipSync(raw).toString('utf8')) as {},
 };
+/* eslint-enable @typescript-eslint/no-empty-object-type */
 
 // Identity codec — proves that wrap() is value-preserving when the codec is.
 const identityCodec: Codec<string, string> = {

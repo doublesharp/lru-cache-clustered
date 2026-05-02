@@ -77,7 +77,8 @@ function isOurResponse(value: unknown): value is Response {
     typeof value === 'object' &&
     value !== null &&
     (value as { source?: unknown }).source === SOURCE &&
-    typeof (value as { id?: unknown }).id === 'string'
+    typeof (value as { id?: unknown }).id === 'string' &&
+    typeof (value as { ok?: unknown }).ok === 'boolean'
   );
 }
 

@@ -154,6 +154,19 @@ void test('sendToPrimary ignores response with unknown id', async () => {
   assert.equal(await p, undefined);
 });
 
+void test('isOurResponse rejects messages missing the ok discriminant', async () => {
+  const fake = makeFakeProcess();
+  const client = createIpcClient({ send: fake.send.bind(fake), on: fake.on.bind(fake) });
+  const p = client.sendToPrimary({ namespace: 'n', timeout: 25, failsafe: 'resolve' }, { op: 'get', key: 'k' });
+  const sent = fake.sent[0] as { id: string };
+  // Deliver a malformed message: matching id and source but no `ok` boolean.
+  // Without the typeof-boolean guard, the callback would try deserializeError(undefined)
+  // and throw out of the message listener.
+  fake.deliver({ id: sent.id, source: SOURCE } as unknown as Response);
+  // sendToPrimary should still time out cleanly with no callback invoked.
+  assert.equal(await p, undefined);
+});
+
 void test('getDefaultClient throws when process.send is unavailable (primary mode)', () => {
   // eslint-disable-next-line @typescript-eslint/unbound-method
   const originalSend = process.send;

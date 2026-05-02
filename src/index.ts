@@ -20,7 +20,8 @@ export interface WriteOptions {
   size?: number;
 }
 
-export type MSetEntry<K, V> = [K, V] | [K, V, WriteOptions];
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type
+export type MSetEntry<K extends {}, V extends {}> = [K, V] | [K, V, WriteOptions];
 
 export interface FetchOptions extends WriteOptions {
   forceRefresh?: boolean;
@@ -36,7 +37,14 @@ interface InternalOptions {
   noInit?: boolean;
 }
 
-export class LRUCacheForClustersAsPromised<K = string, V = unknown> {
+// K and V are constrained to non-nullish to mirror lru-cache@11's own signature
+// (`class LRUCache<K extends {}, V extends {}>`), since the primary enforces
+// non-nullish at runtime via requireNonNullish(). Without the constraint, a
+// caller could write `cache.set(undefined, ...)` and TypeScript would accept it
+// only to fail at the IPC boundary. The {} default for V mirrors lru-cache's
+// own default and means "any non-nullish value".
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type
+export class LRUCacheForClustersAsPromised<K extends {} = string, V extends {} = {}> {
   readonly namespace: string;
   readonly timeout: number;
   readonly failsafe: 'resolve' | 'reject';
@@ -73,7 +81,8 @@ export class LRUCacheForClustersAsPromised<K = string, V = unknown> {
     }
   }
 
-  static async getInstance<K = string, V = unknown>(
+  // eslint-disable-next-line @typescript-eslint/no-empty-object-type
+  static async getInstance<K extends {} = string, V extends {} = {}>(
     options: LRUCacheClusterOptions = {},
   ): Promise<LRUCacheForClustersAsPromised<K, V>> {
     const instance = new LRUCacheForClustersAsPromised<K, V>({

@@ -123,8 +123,6 @@ Instances in different workers that share a `namespace` operate on the same prim
 - **Hot misses** — `fetch()` and `memoize()` collapse concurrent misses for the same key across workers, so origin work scales with unique keys, not concurrent callers.
 - **Design tradeoff** — use this package when cross-worker sharing and single-copy memory matter more than per-call latency; use plain per-process `lru-cache` when your hottest path cannot afford the IPC hop.
 
-The 2.0 rewrite trimmed per-call overhead in a few places that compound on hot paths: primary-mode IPC bypass, monotonic counter for IPC request IDs (replaces `randomUUID`), no empty-options object allocations on calls without options, and a shorter on-the-wire IPC sentinel. How much these matter depends on your workload — workloads dominated by user fetcher work or by IPC bandwidth will see less of a difference than ones dominated by cache-call overhead. Measure your own path before assuming.
-
 ## Options
 
 The serializable subset of [`lru-cache`](https://github.com/isaacs/node-lru-cache) constructor options passes through (`max`, `maxSize`, `maxEntrySize`, `ttl`, `allowStale`, `updateAgeOnGet`, `updateAgeOnHas`, `noDeleteOnStaleGet`, `ttlAutopurge`). Plus:

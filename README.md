@@ -1,21 +1,49 @@
+<p align="center">
+  <img src="https://raw.githubusercontent.com/doublesharp/lru-cache-clustered/main/assets/LRUCacheClustered.png" alt="LRUCacheClustered pika logo" width="180" height="180">
+  <br>
+  <em>pikas pick this package</em>
+</p>
+
 # @0xdoublesharp/lru-cache-clustered
 
 [![npm](https://img.shields.io/npm/v/%400xdoublesharp%2Flru-cache-clustered.svg)](https://www.npmjs.com/package/@0xdoublesharp/lru-cache-clustered)
 [![CI](https://github.com/doublesharp/lru-cache-clustered/actions/workflows/ci.yml/badge.svg)](https://github.com/doublesharp/lru-cache-clustered/actions/workflows/ci.yml)
+[![Coverage](https://github.com/doublesharp/lru-cache-clustered/actions/workflows/coverage.yml/badge.svg)](https://github.com/doublesharp/lru-cache-clustered/actions/workflows/coverage.yml)
 [![codecov](https://codecov.io/gh/doublesharp/lru-cache-clustered/branch/main/graph/badge.svg)](https://codecov.io/gh/doublesharp/lru-cache-clustered)
 [![Downloads](https://img.shields.io/npm/dt/%400xdoublesharp%2Flru-cache-clustered.svg)](https://www.npmjs.com/package/@0xdoublesharp/lru-cache-clustered)
 
-> `@0xdoublesharp/lru-cache-clustered` is the canonical package name. `lru-cache-for-clusters-as-promised` is published as a mirrored legacy alias from the same source.
+> `@0xdoublesharp/lru-cache-clustered` is the canonical package name. `lru-cache-for-clusters-as-promised` is published from the same build at the same version.
 
-**One LRU cache, shared across every worker in your `node:cluster` app.** A typed Promise wrapper around [`lru-cache`](https://www.npmjs.com/package/lru-cache) that lives on the primary process and is reached from workers via IPC — so memory only gets paid once, not per worker. Outside `cluster`, it's a Promise interface to a plain in-process `lru-cache`.
+## Why this exists
 
-- **One copy in memory** — workers don't each duplicate the cache
-- **Race-safe counters** — `incr` / `decr` are atomic on the primary, safe across N workers
-- **Cache-aside in one line** — `fetch()` and `memoize()` collapse concurrent misses for the same key across the cluster
-- **Codec wrappers** — transparent gzip / MessagePack / custom encode-decode via `wrap()`
+A Node.js app running under `cluster` (one process per CPU core) gives every worker its own isolated memory. A 200 MB in-process cache running across 8 workers uses **1.6 GB of RAM caching the same data eight times**. Each worker also warms from cold on its own, so users hit slow paths repeatedly until every worker has seen every popular key.
+
+This library puts a single cache in the primary process and lets every worker read and write it as if it were local. The cache is allocated once. Workers share warm data immediately. Counters and rate limits stay correct across the whole cluster. Outside `cluster`, it falls back to a Promise wrapper around `lru-cache`.
+
+### Features
+
+- **N× less memory** — one cache in the primary, shared by every worker
+- **No cold-start per worker** — once any worker fetches a value, the rest see it
+- **Atomic counters** — `incr` / `decr` run on the primary and stay correct regardless of worker count
+- **Single-flight on misses** — concurrent misses for the same key collapse to one fetch cluster-wide (`fetch` / `memoize`)
+- **Codec wrappers** — gzip, MessagePack, or any custom encoder via `wrap()`
 - **Per-namespace stats** — hits, misses, sets, deletes, evictions, size
-- **TTL with rate-limiter semantics** — `incr` keeps the original expiration ticking
-- **Modern** — TypeScript, dual ESM + CJS, Node >=22, structured error transport
+- **Rate-limiter-friendly TTLs** — `incr` keeps the original window ticking
+- **TypeScript, dual ESM + CJS, Node ≥22**
+
+### When to use it
+
+Session and profile caches, rate limiters, feature flags, deduplicating expensive API calls, or any cache-aside pattern in a multi-worker Node server.
+
+It's also a fit when you don't want to run a Redis or Memcached server. Small services, side projects, on-prem deploys, and early-stage products often don't justify a separate caching tier. This library gives you cluster-wide shared caching with no extra infrastructure.
+
+In larger systems, it works well as the **L1 in a multi-layer cache** sitting in front of Redis or Memcached: hot keys are served in-process, the long tail falls through to the shared remote cache, and the origin only sees true cold misses.
+
+Reach for something else when you need sharing across multiple machines (use Redis/Memcached, or layer this in front of one), or when your hottest path can't tolerate an IPC hop on a miss. See [Performance profile](#performance-profile).
+
+### How it works
+
+Node's `cluster` module already wires the primary and workers over built-in IPC. The real `lru-cache` lives in the primary. In each worker, the cache object is a thin proxy that sends a typed message to the primary and returns a Promise; the primary does the work and replies. Workers never hold their own copy of the data.
 
 > **API shape.** The surface follows modern `lru-cache` conventions. If you're upgrading from an older release line, see [Migrating from older releases](#migrating-from-older-releases).
 
@@ -29,7 +57,7 @@ pnpm add @0xdoublesharp/lru-cache-clustered lru-cache
 yarn add @0xdoublesharp/lru-cache-clustered lru-cache
 ```
 
-If you need to keep the legacy package name, the same release line is also published as `lru-cache-for-clusters-as-promised`.
+If you need to keep the legacy package name, `lru-cache-for-clusters-as-promised` is published from the same build at the same version.
 
 ## Quick start
 

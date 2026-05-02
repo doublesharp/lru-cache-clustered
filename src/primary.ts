@@ -33,7 +33,16 @@ type DispatchContext = {
 type FetchLock = {
   token: string;
   ownerWorkerId?: number;
+  claimedAt: number;
 };
+
+// Lease window for a fetch claim. If the leader hasn't called fetchStore
+// or fetchAbort within this many ms, a new fetchClaim will overwrite the
+// stale lock and become the new leader. Bounds tail latency when a leader
+// hangs without process exit (which would otherwise be released by the
+// cluster.on('exit') handler). 30s is generous for typical user fetchers
+// and short enough that hung-leader incidents do not park requests forever.
+const FETCH_LEASE_MS = 30_000;
 
 type PrimaryState = {
   caches: Map<string, AnyCache>;
@@ -370,13 +379,19 @@ export function dispatchOp(namespace: string, payload: ExecPayload, context: Dis
       const cache = getCacheForPayload(namespace, payload);
       const key = requireNonNullish('cache key', payload.key);
       const locks = getFetchNamespaceLocks(namespace);
+      const now = Date.now();
       if (!payload.forceRefresh) {
         const value = cache.get(key);
         if (value !== undefined) return { kind: 'value', value };
-        if (locks.has(key)) return { kind: 'follower' };
+        const existing = locks.get(key);
+        // Treat a stale lock as gone, so a new caller can take leadership
+        // and unstick followers when a previous leader hung without exiting.
+        if (existing && now - existing.claimedAt < FETCH_LEASE_MS) {
+          return { kind: 'follower' };
+        }
       }
       const token = `fetch-${++primaryState.nextFetchToken}`;
-      locks.set(key, { token, ownerWorkerId: context.workerId });
+      locks.set(key, { token, ownerWorkerId: context.workerId, claimedAt: now });
       return { kind: 'leader', token };
     }
     case 'fetchStore': {

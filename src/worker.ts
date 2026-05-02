@@ -73,13 +73,30 @@ export function createIpcClient(proc: ProcessLike): IpcClient {
 }
 
 function isOurResponse(value: unknown): value is Response {
-  return (
-    typeof value === 'object' &&
-    value !== null &&
-    (value as { source?: unknown }).source === SOURCE &&
-    typeof (value as { id?: unknown }).id === 'string' &&
-    typeof (value as { ok?: unknown }).ok === 'boolean'
-  );
+  if (
+    typeof value !== 'object' ||
+    value === null ||
+    (value as { source?: unknown }).source !== SOURCE ||
+    typeof (value as { id?: unknown }).id !== 'string' ||
+    typeof (value as { ok?: unknown }).ok !== 'boolean'
+  ) {
+    return false;
+  }
+  // When ok=false, validate the error payload shape too. Without this guard a
+  // malformed error from a misbehaving primary would crash the message
+  // listener in deserializeError(undefined) and take the worker down.
+  if ((value as { ok: boolean }).ok === false) {
+    const error = (value as { error?: unknown }).error;
+    if (
+      typeof error !== 'object' ||
+      error === null ||
+      typeof (error as { name?: unknown }).name !== 'string' ||
+      typeof (error as { message?: unknown }).message !== 'string'
+    ) {
+      return false;
+    }
+  }
+  return true;
 }
 
 // Lazy singleton for the actual worker process. Constructing the client

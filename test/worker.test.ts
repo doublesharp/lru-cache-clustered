@@ -167,6 +167,26 @@ void test('isOurResponse rejects messages missing the ok discriminant', async ()
   assert.equal(await p, undefined);
 });
 
+void test('isOurResponse rejects ok=false messages with malformed error payload', async () => {
+  const fake = makeFakeProcess();
+  const client = createIpcClient({ send: fake.send.bind(fake), on: fake.on.bind(fake) });
+  const p = client.sendToPrimary({ namespace: 'n', timeout: 25, failsafe: 'resolve' }, { op: 'get', key: 'k' });
+  const sent = fake.sent[0] as { id: string };
+  // Deliver an ok=false message with no error payload. Without the
+  // error-shape guard, deserializeError(undefined) would throw at
+  // payload.message inside the message listener and crash the worker.
+  fake.deliver({ id: sent.id, source: SOURCE, ok: false } as unknown as Response);
+  fake.deliver({ id: sent.id, source: SOURCE, ok: false, error: 'not-an-object' } as unknown as Response);
+  fake.deliver({
+    id: sent.id,
+    source: SOURCE,
+    ok: false,
+    error: { message: 'no-name' },
+  } as unknown as Response);
+  // None of the malformed messages reach the callback; sendToPrimary times out.
+  assert.equal(await p, undefined);
+});
+
 void test('getDefaultClient throws when process.send is unavailable (primary mode)', () => {
   // eslint-disable-next-line @typescript-eslint/unbound-method
   const originalSend = process.send;

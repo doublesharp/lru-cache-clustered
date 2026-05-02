@@ -859,6 +859,51 @@ void test('handleRequest fetch single-flight coordinates leader, follower, and f
   assert.equal((d('get', { key: 'k' }) as { value: unknown }).value, 'fresh');
 });
 
+void test('fetchClaim expires a stale leader lock and grants leadership to a follower', () => {
+  caches.clear();
+  stats.clear();
+  const ns = 'fetch-lease';
+  const d = (op: string, extra: object = {}) =>
+    handleRequest({ id: 'r', namespace: ns, source: SOURCE, op, ...extra } as Request);
+
+  d('init', { options: { max: 10 } });
+
+  const realNow = Date.now;
+  let mockTime = realNow();
+  Date.now = () => mockTime;
+
+  try {
+    const leader1 = (d('fetchClaim', { key: 'k' }) as { value: { kind: string; token?: string } }).value;
+    assert.equal(leader1.kind, 'leader');
+
+    // Within the lease window, a second caller is still a follower.
+    mockTime += 1_000;
+    const followerWhileFresh = (d('fetchClaim', { key: 'k' }) as { value: { kind: string } }).value;
+    assert.equal(followerWhileFresh.kind, 'follower');
+
+    // Past the lease window, the stale lock is treated as released and the
+    // next caller takes leadership. This unblocks followers when a leader
+    // hangs without process exit.
+    mockTime += 60_000;
+    const leader2 = (d('fetchClaim', { key: 'k' }) as { value: { kind: string; token?: string } }).value;
+    assert.equal(leader2.kind, 'leader');
+    assert.notEqual(leader1.token, leader2.token);
+
+    // The original leader's fetchStore is rejected because its token no
+    // longer matches the active lock.
+    assert.equal(
+      (d('fetchStore', { key: 'k', token: leader1.token, value: 'stale' }) as { value: unknown }).value,
+      false,
+    );
+    assert.equal(
+      (d('fetchStore', { key: 'k', token: leader2.token, value: 'fresh' }) as { value: unknown }).value,
+      true,
+    );
+  } finally {
+    Date.now = realNow;
+  }
+});
+
 void test('handleRequest op=stats returns counters after get/set/delete', () => {
   caches.clear();
   stats.clear();
@@ -1047,6 +1092,37 @@ void test('serializeError wraps non-Error throws', () => {
   assert.deepEqual(serializeError('plain string'), { name: 'Error', message: 'plain string' });
   assert.deepEqual(serializeError(42), { name: 'Error', message: '42' });
   assert.deepEqual(serializeError({ foo: 1 }), { name: 'Error', message: '[object Object]' });
+});
+
+void test('serializeError detects self-referential cause cycles', () => {
+  const e = new Error('loop') as Error & { cause?: unknown };
+  e.cause = e;
+  // Without cycle detection this would recurse forever and stack-overflow.
+  const s = serializeError(e);
+  assert.equal(s.message, 'loop');
+  assert.equal((s.cause as { message?: string } | undefined)?.message, '[circular cause]');
+});
+
+void test('serializeError truncates very deep cause chains', () => {
+  let leaf: Error & { cause?: unknown } = new Error('leaf');
+  // Build a chain longer than SERIALIZE_CAUSE_MAX_DEPTH (8).
+  for (let i = 0; i < 20; i++) {
+    const wrapper: Error & { cause?: unknown } = new Error(`level-${i}`);
+    wrapper.cause = leaf;
+    leaf = wrapper;
+  }
+  const s = serializeError(leaf);
+  // Walk down the cause chain and confirm a truncation marker appears.
+  let cur: { message?: string; cause?: unknown } | undefined = s;
+  let truncated = false;
+  while (cur) {
+    if (cur.message === '[cause chain truncated]') {
+      truncated = true;
+      break;
+    }
+    cur = cur.cause as { message?: string; cause?: unknown } | undefined;
+  }
+  assert.equal(truncated, true, 'expected a truncation marker somewhere in the cause chain');
 });
 
 void test('deserializeError round-trips through serialize', () => {

@@ -95,14 +95,34 @@ export type Stats = {
   size: number;
 };
 
+// Cause chains are walked recursively. Cap depth and detect cycles so a
+// pathological error (self-referential cause, or a chain dozens deep)
+// cannot stack-overflow the primary's IPC message handler and crash the
+// cluster.
+const SERIALIZE_CAUSE_MAX_DEPTH = 8;
+
 export function serializeError(err: unknown): SerializedError {
+  return serializeErrorAt(err, 0, new Set());
+}
+
+function serializeErrorAt(err: unknown, depth: number, seen: Set<object>): SerializedError {
   if (err instanceof Error) {
+    if (seen.has(err)) {
+      return { name: err.name, message: '[circular cause]' };
+    }
+    seen.add(err);
     const out: SerializedError = { name: err.name, message: err.message };
     if (err.stack) out.stack = err.stack;
     const code = (err as { code?: unknown }).code;
     if (typeof code === 'string' || typeof code === 'number') out.code = code;
     const cause = (err as { cause?: unknown }).cause;
-    if (cause !== undefined) out.cause = serializeError(cause);
+    if (cause !== undefined) {
+      if (depth + 1 >= SERIALIZE_CAUSE_MAX_DEPTH) {
+        out.cause = { name: 'Error', message: '[cause chain truncated]' };
+      } else {
+        out.cause = serializeErrorAt(cause, depth + 1, seen);
+      }
+    }
     return out;
   }
   return { name: 'Error', message: typeof err === 'string' ? err : String(err) };

@@ -13,6 +13,15 @@ pnpm example:multilayer
 
 They import `../src/index.ts` so you can exercise the current workspace without building first. If you copy an example into another app, switch that import to `@0xdoublesharp/lru-cache-clustered`.
 
+| Example       | Feature it demonstrates                                                             |
+| ------------- | ----------------------------------------------------------------------------------- |
+| `users`       | Cache-aside via `memoize()` / `fetch()` with cluster-wide single-flight             |
+| `rate-limit`  | Atomic `incr()` with rate-limiter-friendly TTL (window doesn't reset on each bump)  |
+| `sessions`    | Shared `set()` / `get()` / `delete()` state across workers                          |
+| `idempotency` | `setIfAbsent()` for cluster-wide duplicate suppression / once-only claim            |
+| `documents`   | `wrap()` with gzip + base64 for compressed values that survive cluster IPC          |
+| `multilayer`  | Clustered LRU as L1 in front of Redis L2, with single-flight collapsing cold misses |
+
 ## `clustered-users-server.ts`
 
 Small read-heavy API that demonstrates cluster-wide `memoize()` and `fetch()`.

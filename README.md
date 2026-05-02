@@ -26,6 +26,7 @@ This library puts a single cache in the primary process and lets every worker re
 - **No cold-start per worker** — once any worker fetches a value, the rest see it
 - **Atomic counters** — `incr` / `decr` run on the primary and stay correct regardless of worker count
 - **Single-flight on misses** — concurrent misses for the same key collapse to one fetch cluster-wide (`fetch` / `memoize`)
+- **Atomic claims** — `setIfAbsent()` lets one worker win a key for idempotent intake or once-only init
 - **Codec wrappers** — gzip, MessagePack, or any custom encoder via `wrap()`
 - **Per-namespace stats** — hits, misses, sets, deletes, evictions, size
 - **Rate-limiter-friendly TTLs** — `incr` keeps the original window ticking
@@ -269,6 +270,30 @@ The cache `timeout` option only bounds each worker IPC request. It does not canc
 **Worker mode.** When a primary-side handler throws, the worker's promise rejects with a reconstructed `Error` carrying the original `name`, `message`, `code`, `stack`, and `cause` chain. The rejected value is always a plain `Error` (subclass identity isn't crossed over IPC), but `.name`, `.code`, and `.cause` are intact, so logging and cause-chain walking work. Errors travel as `{ name, message, code?, stack?, cause? }` on the wire.
 
 **Primary mode.** No IPC: a thrown `Error` rejects as-is (subclass identity preserved); a thrown non-`Error` value is wrapped in `new Error(String(value))`. For `Error` throws the two modes are observably equivalent.
+
+## New in 2.0
+
+Net-new additions over the 1.x line. The [migration table below](#migrating-from-older-releases) covers what was renamed or removed.
+
+| Addition                              | What it gives you                                                                                                                                                                                                                     |
+| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `LRUCacheClustered`                   | Short alias for `LRUCacheForClustersAsPromised`. Both are exported.                                                                                                                                                                   |
+| `LRUCacheClustered.bootstrap()`       | Explicit primary-side IPC listener install, instead of relying on import side effects. See [Quick start](#quick-start).                                                                                                               |
+| `LRUCacheClustered.getInstance(opts)` | Async factory that fails fast in workers if the primary cannot register the namespace.                                                                                                                                                |
+| `cache.fetch(key, fetcher, opts)`     | Cache-aside with **cluster-wide single-flight**: concurrent misses for the same key collapse to one fetcher run across all workers. See [`/wrap`](#wrap--codec--compression) and [Single-Flight Semantics](#single-flight-semantics). |
+| `memoize(cache, fn, keyFn, opts)`     | One-line cache-aside helper that delegates to `fetch()`. See [`memoize` helper](#memoize-helper).                                                                                                                                     |
+| `wrap(cache, codec)`                  | Transparent encode/decode wrapper for compression (gzip, brotli) or serialization (MessagePack, custom). See [`wrap` — codec / compression](#wrap--codec--compression).                                                               |
+| `setIfAbsent(key, value, opts)`       | Atomic claim on the primary; `false` if the key already exists. Useful for idempotency and once-only initialization.                                                                                                                  |
+| `mGet` / `mSet` / `mDelete`           | Multi-key variants that round-trip to the primary in a single IPC hop.                                                                                                                                                                |
+| `getRemainingTTL(key)`                | ms until expiry; `Infinity` for keys with no TTL, `0` for missing keys.                                                                                                                                                               |
+| `purgeStale()`                        | Manual sweep of expired entries (replaces the v1 cron-based `prune` option).                                                                                                                                                          |
+| `healthCheck()`                       | Verifies the primary can resolve the namespace and answer requests. Always rejects on failure regardless of `failsafe`.                                                                                                               |
+| `destroy()`                           | Tears down the namespace cache, stats, and primary-side coordination state.                                                                                                                                                           |
+| `stats()`                             | `{ hits, misses, sets, deletes, evictions, size, namespace }` per namespace, no extra wiring.                                                                                                                                         |
+| Size-bounded caches                   | `maxSize` and `maxEntrySize` options; `size` accepted on every write path.                                                                                                                                                            |
+| Structured error transport            | Worker-side rejections carry `name`, `code`, `stack`, and the `cause` chain across IPC. See [Errors](#errors).                                                                                                                        |
+| Generic types                         | `LRUCacheClustered<K, V>` and friends are fully generic; `WrappedCache<K, V>` from `wrap()` re-types the value side.                                                                                                                  |
+| Dual ESM + CJS, Node ≥22              | First-class TypeScript types for both module formats; no transpile step in your build.                                                                                                                                                |
 
 ## Migrating from older releases
 

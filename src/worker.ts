@@ -26,7 +26,7 @@ type ProcessLike = {
 type DistributiveOmit<T, K extends keyof never> = T extends unknown ? Omit<T, K> : never;
 type RequestPayload = DistributiveOmit<Request, 'id' | 'namespace' | 'source'>;
 
-export interface IpcClient {
+interface IpcClient {
   sendToPrimary: <T = unknown>(opts: SendOptions, payload: RequestPayload) => Promise<T>;
 }
 

@@ -118,10 +118,12 @@ Instances in different workers that share a `namespace` operate on the same prim
 
 ## Performance profile
 
-- **Primary mode** — operations dispatch directly to the local `lru-cache` instance.
+- **Primary mode** — operations dispatch directly to the local `lru-cache` instance, bypassing the IPC machinery entirely (no message build, no request-ID allocation, no pending-response bookkeeping).
 - **Worker mode** — every cache operation is an IPC round trip through the primary.
-- **Hot misses** — `fetch()` and `memoize()` collapse concurrent misses for the same key across workers.
+- **Hot misses** — `fetch()` and `memoize()` collapse concurrent misses for the same key across workers, so origin work scales with unique keys, not concurrent callers.
 - **Design tradeoff** — use this package when cross-worker sharing and single-copy memory matter more than per-call latency; use plain per-process `lru-cache` when your hottest path cannot afford the IPC hop.
+
+The 2.0 rewrite trimmed per-call overhead in a few places that compound on hot paths: primary-mode IPC bypass, monotonic counter for IPC request IDs (replaces `randomUUID`), no empty-options object allocations on calls without options, and a shorter on-the-wire IPC sentinel. How much these matter depends on your workload — workloads dominated by user fetcher work or by IPC bandwidth will see less of a difference than ones dominated by cache-call overhead. Measure your own path before assuming.
 
 ## Options
 
@@ -294,6 +296,7 @@ Net-new additions over the 1.x line. The [migration table below](#migrating-from
 | Structured error transport            | Worker-side rejections carry `name`, `code`, `stack`, and the `cause` chain across IPC. See [Errors](#errors).                                                                                                                        |
 | Generic types                         | `LRUCacheClustered<K, V>` and friends are fully generic; `WrappedCache<K, V>` from `wrap()` re-types the value side.                                                                                                                  |
 | Dual ESM + CJS, Node ≥22              | First-class TypeScript types for both module formats; no transpile step in your build.                                                                                                                                                |
+| Per-call overhead trimmed             | Primary-mode IPC bypass, monotonic request-ID counter (replaces `randomUUID`), no empty-options allocations on calls without options, shorter IPC sentinel. See [Performance profile](#performance-profile).                          |
 
 ## Migrating from older releases
 

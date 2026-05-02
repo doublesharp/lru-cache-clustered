@@ -41,6 +41,7 @@
     "example:sessions": "node --import tsx examples/clustered-session-server.ts",
     "example:idempotency": "node --import tsx examples/clustered-idempotency-server.ts",
     "example:documents": "node --import tsx examples/clustered-compressed-documents-server.ts",
+    "example:multilayer": "node --import tsx examples/clustered-multilayer-redis-server.ts",
     "test": "node --import tsx --test test/*.test.ts",
     "test:coverage": "c8 --reporter=text --reporter=lcov --include='src/**/*.ts' pnpm test",
     "lint": "eslint --no-error-on-unmatched-pattern src test examples",

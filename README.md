@@ -91,13 +91,14 @@ if (cluster.isPrimary) {
 
 ## Examples
 
-Runnable clustered server examples live in [`examples/README.md`](./examples/README.md):
+Runnable clustered server examples — see [`examples/README.md`](./examples/README.md) for run instructions and curl recipes.
 
-- shared read-through user cache via `memoize()` / `fetch()`
-- fixed-window rate limiting via atomic `incr()`
-- shared session storage via `set()` / `get()` / `delete()`
-- idempotent job intake via `setIfAbsent()`
-- compressed document caching via `wrap()`
+- [`clustered-users-server.ts`](./examples/clustered-users-server.ts) — shared read-through user cache via `memoize()` / `fetch()`
+- [`clustered-rate-limit-server.ts`](./examples/clustered-rate-limit-server.ts) — fixed-window rate limiting via atomic `incr()`
+- [`clustered-session-server.ts`](./examples/clustered-session-server.ts) — shared session storage via `set()` / `get()` / `delete()`
+- [`clustered-idempotency-server.ts`](./examples/clustered-idempotency-server.ts) — idempotent job intake via `setIfAbsent()`
+- [`clustered-compressed-documents-server.ts`](./examples/clustered-compressed-documents-server.ts) — compressed document caching via `wrap()`
+- [`clustered-multilayer-redis-server.ts`](./examples/clustered-multilayer-redis-server.ts) — clustered LRU as L1 in front of Redis as L2, with cluster-wide single-flight on cold keys
 
 ## How it works
 

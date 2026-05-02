@@ -8,6 +8,7 @@ pnpm example:rate-limit
 pnpm example:sessions
 pnpm example:idempotency
 pnpm example:documents
+pnpm example:multilayer
 ```
 
 They import `../src/index.ts` so you can exercise the current workspace without building first. If you copy an example into another app, switch that import to `@0xdoublesharp/lru-cache-clustered`.
@@ -98,6 +99,28 @@ What to look for:
 - Responses include both `jsonBytes` and `storedBytes`.
 - The compressed size stays in the primary while callers read and write decoded JSON values.
 
+## `clustered-multilayer-redis-server.ts`
+
+Two-layer cache demonstrating clustered LRU as L1 in front of Redis as L2, with a simulated origin behind both. Uses `cache.fetch()` so concurrent L1 misses for the same key collapse to a single Redis read across the whole cluster.
+
+Requires a running Redis (defaults to `redis://127.0.0.1:6379`) and the `redis` client package:
+
+```sh
+pnpm add -D redis
+pnpm example:multilayer
+curl http://127.0.0.1:3005/products/42
+curl http://127.0.0.1:3005/products/42
+curl 'http://127.0.0.1:3005/products/42/invalidate'
+curl http://127.0.0.1:3005/stats
+```
+
+What to look for:
+
+- First request returns `source: "origin"`. Repeats within `L1_TTL_MS` return `source: "l1"`.
+- After L1 expires but before L2 expires (`L2_TTL_S`), the next request returns `source: "l2"` and re-warms L1.
+- Invalidate the key, then call again: `source: "origin"`.
+- Fire many concurrent requests for a cold key — only one worker reaches origin; the rest reuse the leader's value.
+
 ## Environment variables
 
 All examples accept:
@@ -113,3 +136,10 @@ The rate-limit example also accepts:
 
 - `LIMIT`
 - `WINDOW_MS`
+
+The multilayer example also accepts:
+
+- `REDIS_URL` (default `redis://127.0.0.1:6379`)
+- `L1_TTL_MS` (default `5000`)
+- `L2_TTL_S` (default `60`)
+- `ORIGIN_LATENCY_MS` (default `250`)

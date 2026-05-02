@@ -262,7 +262,10 @@ export function dispatchOp(namespace: string, payload: ExecPayload, context: Dis
     case 'setIfAbsent': {
       const cache = getCacheForPayload(namespace, payload);
       const key = requireNonNullish('cache key', payload.key);
-      if (cache.has(key)) return false;
+      // peek() instead of has() so updateAgeOnHas does not extend the
+      // existing entry's TTL on a no-op setIfAbsent. Cache values are
+      // non-nullish, so undefined unambiguously means "not present".
+      if (cache.peek(key) !== undefined) return false;
       cache.set(
         key,
         requireNonNullish('cache value', payload.value),
@@ -353,16 +356,20 @@ export function dispatchOp(namespace: string, payload: ExecPayload, context: Dis
     case 'decr': {
       const cache = getCacheForPayload(namespace, payload);
       const key = requireNonNullish('cache key', payload.key);
-      const existed = cache.has(key);
-      const current = cache.get(key);
+      // peek() rather than has()/get() so updateAgeOnHas/updateAgeOnGet
+      // do not refresh the entry's age before the noUpdateTTL set below.
+      // Otherwise the rate-limiter "ttl on first write only" semantics
+      // would silently extend the original window on every increment.
+      const current = cache.peek(key);
+      const existed = current !== undefined;
       const base = typeof current === 'number' ? current : 0;
       const delta = (payload.amount ?? 1) * (payload.op === 'decr' ? -1 : 1);
       const next = base + delta;
       const size = payload.size ?? (existed ? readEntrySize(cache, key) : undefined);
       // Rate-limiter semantics: ttl on first write only. For pre-existing
-      // keys, noUpdateTTL keeps the original expiration ticking — without
-      // it, `cache.set(k, v)` would reset to the cache's default ttl (or
-      // strip it entirely if the cache has none).
+      // keys, noUpdateTTL keeps the original expiration ticking; without it,
+      // cache.set(k, v) would reset to the cache's default ttl (or strip
+      // it entirely if the cache has none).
       const setOpts = buildSetOptions(
         existed
           ? { size, noUpdateTTL: true }

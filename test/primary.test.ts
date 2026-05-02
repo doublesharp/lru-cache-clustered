@@ -1094,6 +1094,49 @@ void test('serializeError wraps non-Error throws', () => {
   assert.deepEqual(serializeError({ foo: 1 }), { name: 'Error', message: '[object Object]' });
 });
 
+void test('setIfAbsent does not refresh TTL via updateAgeOnHas on existing key', async () => {
+  caches.clear();
+  stats.clear();
+  const ns = 'sia-no-age-update';
+  const d = (op: string, extra: object = {}) =>
+    handleRequest({ id: 'r', namespace: ns, source: SOURCE, op, ...extra } as Request);
+
+  d('init', { options: { max: 5, updateAgeOnHas: true, updateAgeOnGet: true } });
+  d('set', { key: 'k', value: 'v0', ttl: 10_000 });
+
+  // Let real time advance enough that a refreshed age would be obviously
+  // distinguishable from the original (~10000 vs ~9950).
+  await new Promise((r) => setTimeout(r, 50));
+
+  const result = (d('setIfAbsent', { key: 'k', value: 'v1' }) as { value: unknown }).value;
+  assert.equal(result, false, 'existing key should reject the write');
+
+  const ttlAfter = (d('getRemainingTTL', { key: 'k' }) as { value: number }).value;
+  assert.ok(ttlAfter < 10_000, `expected ttl to have decreased from initial 10_000, got ${ttlAfter}`);
+  assert.ok(ttlAfter >= 9_900, `expected ttl to remain near 9_950 (no refresh), got ${ttlAfter}`);
+});
+
+void test('incr does not refresh TTL via updateAgeOnHas/updateAgeOnGet on existing counter', async () => {
+  caches.clear();
+  stats.clear();
+  const ns = 'incr-no-age-update';
+  const d = (op: string, extra: object = {}) =>
+    handleRequest({ id: 'r', namespace: ns, source: SOURCE, op, ...extra } as Request);
+
+  d('init', { options: { max: 5, updateAgeOnHas: true, updateAgeOnGet: true } });
+  d('set', { key: 'k', value: 0, ttl: 10_000 });
+
+  // Sleep enough that a refreshed age would push ttl back to the original.
+  await new Promise((r) => setTimeout(r, 50));
+
+  const next = (d('incr', { key: 'k' }) as { value: unknown }).value;
+  assert.equal(next, 1);
+
+  const ttlAfter = (d('getRemainingTTL', { key: 'k' }) as { value: number }).value;
+  assert.ok(ttlAfter < 10_000, `expected ttl to have decreased from initial 10_000, got ${ttlAfter}`);
+  assert.ok(ttlAfter >= 9_900, `expected ttl to remain near 9_950 (no refresh), got ${ttlAfter}`);
+});
+
 void test('serializeError detects self-referential cause cycles', () => {
   const e = new Error('loop') as Error & { cause?: unknown };
   e.cause = e;

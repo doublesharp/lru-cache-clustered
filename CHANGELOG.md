@@ -1,4 +1,4 @@
-# 2.0.0 / 2026-04-27
+# 2.0.0 / 2026-04-28
 
 ## Breaking changes — TypeScript rewrite
 
@@ -14,8 +14,11 @@
 
 ## Features and infrastructure
 
-- Canonical package name is now `@0xdoublesharp/lru-cache-clustered`; `lru-cache-for-clusters-as-promised` is mirrored as a legacy alias from the same source
+- Canonical package name is now `@0xdoublesharp/lru-cache-clustered`; `lru-cache-for-clusters-as-promised` is published from the same build at the same version
 - Repository moved to `github.com/doublesharp/lru-cache-clustered`
+- Publish workflow builds once, prepares scoped and legacy package directories, and publishes both at the same version with npm provenance via GitHub Actions OIDC
+- Publish prep validates required build artifacts before creating package directories
+- Scoped and legacy package copies share primary state in one process to avoid duplicate IPC listeners during migration
 - Dual ESM + CJS publish via `package.json` `exports`
 - Generic types: `LRUCacheForClustersAsPromised<K, V>`
 - Node `>=22` required
@@ -26,7 +29,7 @@
 - Dropped runtime deps: `cron`, `uuid` — request IDs use a per-process monotonic counter
 - pnpm for development; node:test + c8 for tests/coverage; tsup + tsc for build
 - 100% line/statement/function coverage
-- CI: GitHub Actions, node 22 and 24 matrix, Codecov upload
+- CI: Node 24 test workflow plus Node 22 coverage workflow for Codecov, Doublcov HTML artifacts, and GitHub Pages coverage publishing from `main`
 - `incr` / `decr` retained (race-safe across workers)
 - `failsafe` and `timeout` retained for worker IPC
 

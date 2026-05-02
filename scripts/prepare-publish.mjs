@@ -19,10 +19,10 @@ const CANONICAL_DOWNLOADS_BADGE =
 const LEGACY_DOWNLOADS_BADGE =
   '[![Downloads](https://img.shields.io/npm/dt/lru-cache-for-clusters-as-promised.svg)](https://www.npmjs.com/package/lru-cache-for-clusters-as-promised)';
 const CANONICAL_NOTE =
-  '> `@0xdoublesharp/lru-cache-clustered` is the canonical package name. `lru-cache-for-clusters-as-promised` is published as a mirrored legacy alias from the same source.';
+  '> `@0xdoublesharp/lru-cache-clustered` is the canonical package name. `lru-cache-for-clusters-as-promised` is published from the same build at the same version.';
 const LEGACY_NOTE = [
   '> This package has moved. New installs should use `@0xdoublesharp/lru-cache-clustered`.',
-  '> `lru-cache-for-clusters-as-promised` is published from the same source as a mirrored compatibility alias.',
+  '> `lru-cache-for-clusters-as-promised` is published from the same build as a compatibility alias.',
 ].join('\n');
 
 await assertBuilt();

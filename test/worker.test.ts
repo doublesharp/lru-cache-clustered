@@ -126,6 +126,37 @@ void test('sendToPrimary rejects and cleans up when process.send throws', async 
   assert.doesNotThrow(() => listeners[0]?.({ id: '1', source: SOURCE, ok: true, value: 'late' }));
 });
 
+void test('sendToPrimary rejects on backpressure when failsafe=reject', async () => {
+  const client = createIpcClient({
+    // proc.send returning false signals IPC channel backpressure; the
+    // message is dropped and no response will ever arrive.
+    send() {
+      return false;
+    },
+    on() {},
+  });
+
+  await assert.rejects(
+    client.sendToPrimary({ namespace: 'n', timeout: 1000, failsafe: 'reject' }, { op: 'get', key: 'k' }),
+    /IPC backpressure/,
+  );
+});
+
+void test('sendToPrimary resolves undefined on backpressure when failsafe=resolve', async () => {
+  const client = createIpcClient({
+    send() {
+      return false;
+    },
+    on() {},
+  });
+
+  const result = await client.sendToPrimary(
+    { namespace: 'n', timeout: 1000, failsafe: 'resolve' },
+    { op: 'get', key: 'k' },
+  );
+  assert.equal(result, undefined);
+});
+
 void test('sendToPrimary wraps non-Error process.send throws', async () => {
   const client = createIpcClient({
     send() {

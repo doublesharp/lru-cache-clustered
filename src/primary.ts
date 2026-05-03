@@ -467,6 +467,14 @@ export function handleRequest(request: Request, context: DispatchContext = {}): 
   if (typeof request !== 'object' || request === null) {
     return err(request, 'invalid request: not an object');
   }
+  // Validate the full Request shape before dispatching. Without this guard,
+  // a malformed payload reaching handleRequest directly (the IPC entry point
+  // already filters via isOurRequest, but the function is exported and could
+  // be called from anywhere) would call dispatchOp with undefined fields and
+  // could mutate the namespace registry under non-string keys.
+  if (!isOurRequest(request)) {
+    return err(request, 'invalid request: missing required fields');
+  }
   try {
     return ok(request, dispatchOp(request.namespace, request, context));
   } catch (e) {

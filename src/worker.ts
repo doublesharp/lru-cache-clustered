@@ -61,7 +61,18 @@ export function createIpcClient(proc: ProcessLike): IpcClient {
 
         messagesDebug('worker -> primary', request);
         try {
-          proc.send(request);
+          // proc.send returns false when the IPC channel is full
+          // (backpressure). The message is silently dropped, so the response
+          // would never arrive and the caller would block until the timeout
+          // fires. Fast-fail here so backpressure surfaces immediately under
+          // the configured failsafe.
+          const sent = proc.send(request);
+          if (sent === false) {
+            clearTimeout(timer);
+            callbacks.delete(id);
+            if (opts.failsafe === 'reject') reject(new Error('IPC backpressure'));
+            else resolve(undefined as T);
+          }
         } catch (error) {
           clearTimeout(timer);
           callbacks.delete(id);

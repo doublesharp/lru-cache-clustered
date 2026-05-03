@@ -1,56 +1,48 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/doublesharp/lru-cache-clustered/main/assets/LRUCacheClustered.png" alt="LRUCacheClustered pika logo" width="180" height="180">
-  <br>
-  <em>pikas pick this package</em>
+  <img src="https://raw.githubusercontent.com/doublesharp/lru-cache-clustered/main/assets/LRUCacheClustered.png" alt="LRUCacheClustered" width="180" height="180">
 </p>
 
-# @0xdoublesharp/lru-cache-clustered
+<h1 align="center">@0xdoublesharp/lru-cache-clustered</h1>
 
-[![npm](https://img.shields.io/npm/v/%400xdoublesharp%2Flru-cache-clustered.svg)](https://www.npmjs.com/package/@0xdoublesharp/lru-cache-clustered)
-[![CI](https://github.com/doublesharp/lru-cache-clustered/actions/workflows/ci.yml/badge.svg)](https://github.com/doublesharp/lru-cache-clustered/actions/workflows/ci.yml)
-[![Coverage](https://github.com/doublesharp/lru-cache-clustered/actions/workflows/coverage.yml/badge.svg)](https://github.com/doublesharp/lru-cache-clustered/actions/workflows/coverage.yml)
-[![codecov](https://codecov.io/gh/doublesharp/lru-cache-clustered/branch/main/graph/badge.svg)](https://codecov.io/gh/doublesharp/lru-cache-clustered)
-[![Downloads](https://img.shields.io/npm/dt/%400xdoublesharp%2Flru-cache-clustered.svg)](https://www.npmjs.com/package/@0xdoublesharp/lru-cache-clustered)
+<p align="center"><em>One LRU cache. Every worker. No Redis required.</em></p>
 
-> `@0xdoublesharp/lru-cache-clustered` is the canonical package name. `lru-cache-for-clusters-as-promised` is published from the same build at the same version.
+<p align="center"><sub>Pikas cache hay for the winter. This package caches everything else.</sub></p>
 
-## Why this exists
+<p align="center">
+  <a href="https://www.npmjs.com/package/@0xdoublesharp/lru-cache-clustered"><img src="https://img.shields.io/npm/v/%400xdoublesharp%2Flru-cache-clustered.svg" alt="npm"></a>
+  <a href="https://github.com/doublesharp/lru-cache-clustered/actions/workflows/ci.yml"><img src="https://github.com/doublesharp/lru-cache-clustered/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/doublesharp/lru-cache-clustered/actions/workflows/coverage.yml"><img src="https://github.com/doublesharp/lru-cache-clustered/actions/workflows/coverage.yml/badge.svg" alt="Coverage"></a>
+  <a href="https://codecov.io/gh/doublesharp/lru-cache-clustered"><img src="https://codecov.io/gh/doublesharp/lru-cache-clustered/branch/main/graph/badge.svg" alt="codecov"></a>
+  <a href="https://www.npmjs.com/package/@0xdoublesharp/lru-cache-clustered"><img src="https://img.shields.io/npm/dt/%400xdoublesharp%2Flru-cache-clustered.svg" alt="Downloads"></a>
+</p>
 
-A Node.js app running under `cluster` (one process per CPU core) gives every worker its own isolated memory. A 200 MB in-process cache running across 8 workers uses **1.6 GB of RAM caching the same data eight times**. Each worker also warms from cold on its own, so users hit slow paths repeatedly until every worker has seen every popular key.
+---
 
-This library puts a single cache in the primary process and lets every worker read and write it as if it were local. The cache is allocated once. Workers share warm data immediately. Counters and rate limits stay correct across the whole cluster. Outside `cluster`, it falls back to a Promise wrapper around `lru-cache`.
+Node's `cluster` module gives every worker its own heap, so an in-process cache duplicates across workers and every worker cold-starts alone. An 8-worker service with a 200 MB cache pays **1.6 GB to hold the same data eight times**.
 
-### Features
+This package keeps a single `lru-cache` in the primary and lets every worker read and write it over `cluster` IPC. One copy of the data, shared warmth across workers, and atomic counters and single-flight fetches that stay correct cluster-wide. No Redis tier, no sidecar.
 
-- **N× less memory** — one cache in the primary, shared by every worker
-- **No cold-start per worker** — once any worker fetches a value, the rest see it
-- **Atomic counters** — `incr` / `decr` run on the primary and stay correct regardless of worker count
-- **Single-flight on misses** — concurrent misses for the same key collapse to one fetch cluster-wide (`fetch` / `memoize`)
-- **Atomic claims** — `setIfAbsent()` lets one worker win a key for idempotent intake or once-only init
-- **Codec wrappers** — gzip, MessagePack, or any custom encoder via `wrap()`
-- **Per-namespace stats** — hits, misses, sets, deletes, evictions, size
-- **Rate-limiter-friendly TTLs** — `incr` keeps the original window ticking
-- **TypeScript, dual ESM + CJS, Node ≥22**
+<p align="center">
+  <img src="https://raw.githubusercontent.com/doublesharp/lru-cache-clustered/main/assets/topology.svg" alt="One LRU cache shared across cluster workers via IPC. The primary process holds a Map of namespaced LRUCache instances; each worker sends typed IPC requests to the primary for every cache operation." width="100%">
+</p>
 
-### When to use it
+## Highlights
 
-Session and profile caches, rate limiters, feature flags, deduplicating expensive API calls, or any cache-aside pattern in a multi-worker Node server.
-
-It's also a fit when you don't want to run a Redis or Memcached server. Small services, side projects, on-prem deploys, and early-stage products often don't justify a separate caching tier. This library gives you cluster-wide shared caching with no extra infrastructure.
-
-In larger systems, it works well as the **L1 in a multi-layer cache** sitting in front of Redis or Memcached: hot keys are served in-process, the long tail falls through to the shared remote cache, and the origin only sees true cold misses.
-
-Reach for something else when you need sharing across multiple machines (use Redis/Memcached, or layer this in front of one), or when your hottest path can't tolerate an IPC hop on a miss. See [Performance profile](#performance-profile).
-
-### How it works
-
-Node's `cluster` module already wires the primary and workers over built-in IPC. The real `lru-cache` lives in the primary. In each worker, the cache object is a thin proxy that sends a typed message to the primary and returns a Promise; the primary does the work and replies. Workers never hold their own copy of the data.
-
-> **API shape.** The surface follows modern `lru-cache` conventions. If you're upgrading from an older release line, see [Migrating from older releases](#migrating-from-older-releases).
+| Capability                     | What it gives you                                                                                          |
+| ------------------------------ | ---------------------------------------------------------------------------------------------------------- |
+| **One cache, N workers**       | The primary owns the data. Memory cost stays flat as you scale workers, instead of multiplying.            |
+| **No per-worker cold start**   | The first worker to load a value warms it for every other worker.                                          |
+| **Atomic counters**            | `incr` / `decr` execute on the primary, so they stay race-safe under any worker count.                     |
+| **Cluster-wide single-flight** | Concurrent misses for the same key collapse to one fetch via `fetch()` / `memoize()`.                      |
+| **Atomic claims**              | `setIfAbsent()` lets exactly one worker win a key &mdash; perfect for idempotent intake or once-only init. |
+| **Pluggable codecs**           | `wrap()` layers gzip, MessagePack, or any symmetric encoder over a cache without changing call sites.      |
+| **Per-namespace stats**        | Hits, misses, sets, deletes, evictions, size &mdash; ready to scrape, no extra wiring.                     |
+| **Rate-limiter-friendly TTLs** | `incr` keeps the original window ticking instead of resetting it on every bump.                            |
+| **Structured IPC errors**      | Worker-side rejections preserve `name`, `code`, `cause`, and `stack` from the primary.                     |
 
 ## Install
 
-`lru-cache` is a peer dependency. Install it alongside this package so you control the version.
+`lru-cache` is a peer dependency &mdash; install it alongside this package so you control the version.
 
 ```sh
 npm install @0xdoublesharp/lru-cache-clustered lru-cache
@@ -58,7 +50,9 @@ pnpm add @0xdoublesharp/lru-cache-clustered lru-cache
 yarn add @0xdoublesharp/lru-cache-clustered lru-cache
 ```
 
-If you need to keep the legacy package name, `lru-cache-for-clusters-as-promised` is published from the same build at the same version.
+TypeScript first. Dual ESM + CJS. Requires Node &ge; 22.
+
+> The legacy package name `lru-cache-for-clusters-as-promised` is published from the same build at the same version, so existing imports keep working during a phased migration.
 
 ## Quick start
 
@@ -80,48 +74,58 @@ if (cluster.isPrimary) {
 } else {
   await cache.set('user:42', JSON.stringify({ name: 'ada' }));
   console.log(await cache.get('user:42'));
-  // {"name":"ada"} — every worker sees the same value
+  // {"name":"ada"} - every worker sees the same value
 }
 ```
 
-> **Naming.** `LRUCacheClustered` is the short alias for `LRUCacheForClustersAsPromised`. The long name remains exported if you prefer the fully explicit class name.
+A few things worth knowing up front:
 
-> **Startup ordering.** Import this package in the primary before `cluster.fork()`. The primary-side IPC listener is installed at module import time; if workers send cache requests before that import happens, they will time out. Call `LRUCacheClustered.bootstrap()` if you want that setup to be explicit in application code.
+- **`LRUCacheClustered` is the short alias** for `LRUCacheForClustersAsPromised`. The long name is still exported.
+- **Import in the primary before `cluster.fork()`.** The primary-side IPC listener is installed at module import. Call `LRUCacheClustered.bootstrap()` if you want that setup to be explicit.
+- **This is a coordination layer, not a security boundary.** Any code in any worker can use any namespace it knows; do not expose namespaces to untrusted callers.
 
-> **Trust boundary.** This is a shared in-process coordination layer, not a security boundary. Any code running in a cluster worker can use any namespace it knows; don't expose namespaces or cache operations directly to untrusted callers.
+## When to use it
+
+Reach for this package when you have a multi-worker Node service and want shared in-process caching without standing up a separate caching tier:
+
+- Session and profile caches
+- Rate limiters and quota counters
+- Feature flag snapshots
+- Deduplicating expensive API or database calls
+- Any cache-aside pattern across workers
+
+It is also a strong fit as the **L1 in a multi-layer cache** in front of Redis or Memcached. Hot keys are served in-process, the long tail falls through to the shared remote cache, and the origin only sees true cold misses.
+
+Reach for something else when you need sharing across multiple machines (use Redis or Memcached, or layer this in front of one), or when your hottest path cannot tolerate an IPC hop on a miss. See [Performance profile](#performance-profile).
 
 ## Examples
 
-Runnable clustered server examples — see [`examples/README.md`](./examples/README.md) for run instructions and curl recipes.
+Runnable clustered server examples &mdash; see [`examples/README.md`](./examples/README.md) for run instructions and curl recipes.
 
-- [`clustered-users-server.ts`](./examples/clustered-users-server.ts) — shared read-through user cache via `memoize()` / `fetch()`
-- [`clustered-rate-limit-server.ts`](./examples/clustered-rate-limit-server.ts) — fixed-window rate limiting via atomic `incr()`
-- [`clustered-session-server.ts`](./examples/clustered-session-server.ts) — shared session storage via `set()` / `get()` / `delete()`
-- [`clustered-idempotency-server.ts`](./examples/clustered-idempotency-server.ts) — idempotent job intake via `setIfAbsent()`
-- [`clustered-compressed-documents-server.ts`](./examples/clustered-compressed-documents-server.ts) — compressed document caching via `wrap()`
-- [`clustered-multilayer-redis-server.ts`](./examples/clustered-multilayer-redis-server.ts) — clustered LRU as L1 in front of Redis as L2, with cluster-wide single-flight on cold keys
+- [`clustered-users-server.ts`](./examples/clustered-users-server.ts) &mdash; shared read-through user cache via `memoize()` / `fetch()`
+- [`clustered-rate-limit-server.ts`](./examples/clustered-rate-limit-server.ts) &mdash; fixed-window rate limiting via atomic `incr()`
+- [`clustered-session-server.ts`](./examples/clustered-session-server.ts) &mdash; shared session storage via `set()` / `get()` / `delete()`
+- [`clustered-idempotency-server.ts`](./examples/clustered-idempotency-server.ts) &mdash; idempotent job intake via `setIfAbsent()`
+- [`clustered-compressed-documents-server.ts`](./examples/clustered-compressed-documents-server.ts) &mdash; compressed document caching via `wrap()`
+- [`clustered-multilayer-redis-server.ts`](./examples/clustered-multilayer-redis-server.ts) &mdash; clustered LRU as L1 in front of Redis as L2, with cluster-wide single-flight on cold keys
 
 ## How it works
 
-<p align="center">
-  <img src="https://raw.githubusercontent.com/doublesharp/lru-cache-clustered/main/assets/topology.svg" alt="One LRU cache shared across cluster workers via IPC. The primary process holds a Map of namespaced LRUCache instances; each worker sends typed IPC requests to the primary for every cache operation. In primary mode the dispatcher is invoked directly with no IPC." width="100%">
-</p>
-
 `new LRUCacheClustered(...)` branches at construction:
 
-- **In the primary** (`cluster.isPrimary === true`), the instance owns and directly operates on the in-process `LRUCache` for its namespace — no IPC, no allocation per call.
+- **In the primary** (`cluster.isPrimary === true`), the instance owns and operates on the in-process `LRUCache` for its namespace directly &mdash; no IPC, no allocation per call.
 - **In a worker**, every operation becomes a typed IPC request to the primary; the returned Promise resolves with the response.
 
-Instances in different workers that share a `namespace` operate on the same primary-side cache. That's where the memory savings come from. Those instances should agree on cache options (`max`, `ttl`, `allowStale`, ...): reusing a namespace with conflicting options throws rather than silently keeping whichever process initialized it first.
+Instances in different workers that share a `namespace` operate on the same primary-side cache. Those instances should agree on cache options (`max`, `ttl`, `allowStale`, ...): reusing a namespace with conflicting options throws rather than silently keeping whichever process initialized it first.
 
 > **Initialization semantics.** In a worker, `new LRUCacheClustered(...)` eagerly sends the `init` message, but `cache.ready` is ordering-only and intentionally swallows init failure. Use `await cache.healthCheck()` or `await LRUCacheClustered.getInstance(...)` when startup should fail fast if the primary cannot register the namespace.
 
 ## Performance profile
 
-- **Primary mode** — operations dispatch directly to the local `lru-cache` instance, bypassing the IPC machinery entirely (no message build, no request-ID allocation, no pending-response bookkeeping).
-- **Worker mode** — every cache operation is an IPC round trip through the primary.
-- **Hot misses** — `fetch()` and `memoize()` collapse concurrent misses for the same key across workers, so origin work scales with unique keys, not concurrent callers.
-- **Design tradeoff** — use this package when cross-worker sharing and single-copy memory matter more than per-call latency; use plain per-process `lru-cache` when your hottest path cannot afford the IPC hop.
+- **Primary mode** &mdash; operations dispatch directly to the local `lru-cache` instance, bypassing the IPC machinery entirely (no message build, no request-ID allocation, no pending-response bookkeeping).
+- **Worker mode** &mdash; every cache operation is an IPC round trip through the primary.
+- **Hot misses** &mdash; `fetch()` and `memoize()` collapse concurrent misses for the same key across workers, so origin work scales with unique keys, not concurrent callers.
+- **Design tradeoff** &mdash; pick this package when cross-worker sharing and single-copy memory matter more than per-call latency; pick plain per-process `lru-cache` when your hottest path cannot afford the IPC hop.
 
 ## Options
 
@@ -135,7 +139,7 @@ The serializable subset of [`lru-cache`](https://github.com/isaacs/node-lru-cach
 
 Function-valued `lru-cache` options such as `dispose`, `disposeAfter`, `sizeCalculation`, or `fetchMethod` do not cross IPC and are not supported by this wrapper.
 
-> **`failsafe: 'resolve'` caveat.** On timeout, `'resolve'` returns `undefined` for _every_ op, regardless of declared return type. For `get` / `peek` that's natural; for `has` / `set` / `delete` / `incr` / `decr` / `size` it can surprise callers (`undefined + 1 === NaN`). Use `'reject'` if typed-shape correctness on timeout matters.
+> **`failsafe: 'resolve'` caveat.** On timeout, `'resolve'` returns `undefined` for _every_ op, regardless of declared return type. For `get` / `peek` that is natural; for `has` / `set` / `delete` / `incr` / `decr` / `size` it can surprise callers (`undefined + 1 === NaN`). Use `'reject'` if typed-shape correctness on timeout matters.
 
 > **Size-bounded caches.** When you use `maxSize` or `maxEntrySize`, provide `size` on every write path (`set`, `setIfAbsent`, `mSet`, `fetch`, `memoize`, and the first `incr` / `decr` for a counter key). `sizeCalculation` does not cross IPC, so the primary cannot infer it for you.
 
@@ -151,7 +155,7 @@ Function-valued `lru-cache` options such as `dispose`, `disposeAfter`, `sizeCalc
 | ---------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `LRUCacheClustered.bootstrap()`          | Installs the primary-side cluster listener immediately. Useful when you want an explicit bootstrap call instead of relying on module import side effects.                        |
 | `LRUCacheClustered.getInstance(options)` | Async factory. In a worker, awaits the init message so the primary has registered the namespace before returning. Preferred when worker startup should fail fast on init errors. |
-| `LRUCacheClustered.getAllCaches()`       | Returns the `Map<namespace, LRUCache>` registry. **Primary only** — throws in workers.                                                                                           |
+| `LRUCacheClustered.getAllCaches()`       | Returns the `Map<namespace, LRUCache>` registry. **Primary only** &mdash; throws in workers.                                                                                     |
 
 ### Core
 
@@ -162,7 +166,7 @@ Function-valued `lru-cache` options such as `dispose`, `disposeAfter`, `sizeCalc
 | `setIfAbsent(key, value, { ttl?, size? })` | `Promise<boolean>`        | Atomic on the primary. `false` if the key already exists. |
 | `delete(key)`                              | `Promise<boolean>`        |                                                           |
 | `has(key)`                                 | `Promise<boolean>`        |                                                           |
-| `peek(key)`                                | `Promise<V \| undefined>` | Doesn't update LRU position.                              |
+| `peek(key)`                                | `Promise<V \| undefined>` | Does not update LRU position.                             |
 | `clear()`                                  | `Promise<void>`           |                                                           |
 
 ### Multi
@@ -175,23 +179,24 @@ Function-valued `lru-cache` options such as `dispose`, `disposeAfter`, `sizeCalc
 
 ### Enumeration
 
-| Method                     | Returns                         | Notes                                                            |
-| -------------------------- | ------------------------------- | ---------------------------------------------------------------- |
-| `keys()`                   | `Promise<K[]>`                  | MRU first.                                                       |
-| `values()`                 | `Promise<V[]>`                  | MRU first.                                                       |
-| `entries()`                | `Promise<[K, V][]>`             | MRU first.                                                       |
-| `[Symbol.asyncIterator]()` | `AsyncIterableIterator<[K, V]>` | `for await (const [k, v] of cache)` — materializes the full set. |
-| `dump()`                   | `Promise<[K, Entry][]>`         | Serializable snapshot.                                           |
-| `load(entries)`            | `Promise<void>`                 | Restores from a `dump()`, preserving per-entry TTL metadata.     |
-| `size()`                   | `Promise<number>`               |                                                                  |
+| Method                     | Returns                         | Notes                                                           |
+| -------------------------- | ------------------------------- | --------------------------------------------------------------- |
+| `keys()`                   | `Promise<K[]>`                  | MRU first.                                                      |
+| `values()`                 | `Promise<V[]>`                  | MRU first.                                                      |
+| `entries()`                | `Promise<[K, V][]>`             | MRU first.                                                      |
+| `[Symbol.asyncIterator]()` | `AsyncIterableIterator<[K, V]>` | `for await (const [k, v] of cache)`. Materializes the full set. |
+| `dump()`                   | `Promise<[K, Entry][]>`         | Serializable snapshot.                                          |
+| `load(entries)`            | `Promise<void>`                 | Restores from a `dump()`, preserving per-entry TTL metadata.    |
+| `size()`                   | `Promise<number>`               |                                                                 |
 
-### Counters & cache-aside
+### Counters and cache-aside
 
-| Method                                               | Returns           | Notes                                                                                                             |
-| ---------------------------------------------------- | ----------------- | ----------------------------------------------------------------------------------------------------------------- |
-| `incr(key, amount?, { ttl?, size? })`                | `Promise<number>` | Atomic on the primary. `ttl` is set on the **first** write only; later increments don't reset it (rate limiters). |
-| `decr(key, amount?, { ttl?, size? })`                | `Promise<number>` | Same.                                                                                                             |
-| `fetch(key, fetcher, { ttl?, size?, forceRefresh })` | `Promise<V>`      | Cache-aside with cluster-wide single-flight semantics. See [Single-Flight Semantics](#single-flight-semantics).   |
+| Method                                               | Returns                | Notes                                                                                                              |
+| ---------------------------------------------------- | ---------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `incr(key, amount?, { ttl?, size? })`                | `Promise<number>`      | Atomic on the primary. `ttl` is set on the **first** write only; later increments do not reset it (rate limiters). |
+| `decr(key, amount?, { ttl?, size? })`                | `Promise<number>`      | Same.                                                                                                              |
+| `fetch(key, fetcher, { ttl?, size?, forceRefresh })` | `Promise<V>`           | Cache-aside with cluster-wide single-flight semantics. See [Single-flight semantics](#single-flight-semantics).    |
+| `memoize(cache, fn, keyFn, opts?)`                   | `(args) => Promise<V>` | Top-level helper. Single-flight via `cache.fetch()`. See [`memoize` helper](#memoize-helper).                      |
 
 ### Lifecycle, metrics, tunables
 
@@ -208,18 +213,16 @@ Function-valued `lru-cache` options such as `dispose`, `disposeAfter`, `sizeCalc
 | `ttl(value?)`          | `Promise<number>`       | Getter and setter.                                                                                                                              |
 | `allowStale(value?)`   | `Promise<boolean>`      | Getter and setter.                                                                                                                              |
 
-## `wrap` — codec / compression
+## `wrap` &mdash; codec / compression
 
-`wrap(cache, codec)` returns a typed view where values pass through an `encode` / `decode` pair on the way in and out. Use it for compression (gzip, brotli), serialization (MessagePack), or any custom symmetric transform. The library stays codec-agnostic — bring your own.
+`wrap(cache, codec)` returns a typed view where values pass through an `encode` / `decode` pair on the way in and out. Use it for compression (gzip, brotli), serialization (MessagePack), or any custom symmetric transform. The library stays codec-agnostic &mdash; bring your own.
 
 ```ts
 import { gzipSync, gunzipSync } from 'node:zlib';
 import { LRUCacheClustered, wrap } from '@0xdoublesharp/lru-cache-clustered';
 
-// In worker mode, values cross cluster IPC, which serializes via JSON and
-// does not preserve `Buffer` identity (Buffers come back as
-// `{ type: 'Buffer', data: number[] }` in workers). Encode to a string
-// (e.g. base64) to keep the wire format Buffer-safe across workers.
+// Encode to a string (base64 here) so the wire format is Buffer-safe in workers.
+// See the Buffer caveat below.
 const inner = new LRUCacheClustered<string, string>({ namespace: 'big-blobs', max: 1000 });
 
 const cache = wrap(inner, {
@@ -233,9 +236,9 @@ await cache.get('user:42'); // decoded back to { id: 42, name: 'ada' }
 
 `encode` and `decode` may be sync or async. The wrapped surface covers value-touching ops (`get`, `set`, `setIfAbsent`, `peek`, `mGet`, `mSet`, `values`, `entries`, async iteration, `fetch`) plus the lifecycle and metric pass-throughs (`has`, `delete`, `keys`, `size`, `clear`, `destroy`, `healthCheck`, `purgeStale`, `getRemainingTTL`, `stats`).
 
-`incr` / `decr` and `dump` / `load` are not wrapped — they speak in numbers or the raw stored form. Reach them via `wrapped.cache` if you need them.
+`incr` / `decr` and `dump` / `load` are not wrapped &mdash; they speak in numbers or the raw stored form. Reach them via `wrapped.cache` if you need them.
 
-> **Buffer-typed values.** Cluster IPC serializes through JSON, which doesn't preserve `Buffer`. If a codec stores `Buffer` directly, in worker mode the decoded side will receive `{ type: 'Buffer', data: number[] }` and most binary APIs will reject it. Encode to a string (base64, hex) — or rehydrate inside `decode` — when the wrapped cache is read from workers. Primary-only use is unaffected.
+> **Buffer-typed values.** Cluster IPC serializes through JSON, which does not preserve `Buffer`. If a codec stores `Buffer` directly, in worker mode the decoded side will receive `{ type: 'Buffer', data: number[] }` and most binary APIs will reject it. Encode to a string (base64, hex) &mdash; or rehydrate inside `decode` &mdash; when the wrapped cache is read from workers. Primary-only use is unaffected.
 
 ## `memoize` helper
 
@@ -257,67 +260,19 @@ await getUser('42'); // first call: hits DB
 await getUser('42'); // second call: cached
 ```
 
-### Single-Flight Semantics
+### Single-flight semantics
 
 Both `memoize()` and `cache.fetch()` coordinate through the primary so concurrent misses for the same key collapse to one in-flight fetch across instances and workers.
 
-`forceRefresh` still bypasses the cached-value check and the current claim, so it intentionally starts a new leader fetch. Followers wait for a value to appear, then reuse it.
+Passing `forceRefresh: true` skips both the cache lookup and any in-flight claim and starts a fresh leader fetch. Concurrent callers without `forceRefresh` still wait on whichever fetch is in flight and reuse its result.
 
 The cache `timeout` option only bounds each worker IPC request. It does not cancel user fetcher work after a worker owns the primary-side single-flight lock, so production fetchers should enforce their own upstream timeout or abort policy.
 
 ## Errors
 
-**Worker mode.** When a primary-side handler throws, the worker's promise rejects with a reconstructed `Error` carrying the original `name`, `message`, `code`, `stack`, and `cause` chain. The rejected value is always a plain `Error` (subclass identity isn't crossed over IPC), but `.name`, `.code`, and `.cause` are intact, so logging and cause-chain walking work. Errors travel as `{ name, message, code?, stack?, cause? }` on the wire.
+**Worker mode.** When a primary-side handler throws, the worker's promise rejects with a reconstructed `Error` carrying the original `name`, `message`, `code`, `stack`, and `cause` chain. The rejected value is always a plain `Error` (subclass identity is not crossed over IPC), but `.name`, `.code`, and `.cause` are intact, so logging and cause-chain walking work. Errors travel as `{ name, message, code?, stack?, cause? }` on the wire.
 
 **Primary mode.** No IPC: a thrown `Error` rejects as-is (subclass identity preserved); a thrown non-`Error` value is wrapped in `new Error(String(value))`. For `Error` throws the two modes are observably equivalent.
-
-## New in 2.0
-
-Net-new additions over the 1.x line. The [migration table below](#migrating-from-older-releases) covers what was renamed or removed.
-
-| Addition                              | What it gives you                                                                                                                                                                                                                     |
-| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `LRUCacheClustered`                   | Short alias for `LRUCacheForClustersAsPromised`. Both are exported.                                                                                                                                                                   |
-| `LRUCacheClustered.bootstrap()`       | Explicit primary-side IPC listener install, instead of relying on import side effects. See [Quick start](#quick-start).                                                                                                               |
-| `LRUCacheClustered.getInstance(opts)` | Async factory that fails fast in workers if the primary cannot register the namespace.                                                                                                                                                |
-| `cache.fetch(key, fetcher, opts)`     | Cache-aside with **cluster-wide single-flight**: concurrent misses for the same key collapse to one fetcher run across all workers. See [`/wrap`](#wrap--codec--compression) and [Single-Flight Semantics](#single-flight-semantics). |
-| `memoize(cache, fn, keyFn, opts)`     | One-line cache-aside helper that delegates to `fetch()`. See [`memoize` helper](#memoize-helper).                                                                                                                                     |
-| `wrap(cache, codec)`                  | Transparent encode/decode wrapper for compression (gzip, brotli) or serialization (MessagePack, custom). See [`wrap` — codec / compression](#wrap--codec--compression).                                                               |
-| `setIfAbsent(key, value, opts)`       | Atomic claim on the primary; `false` if the key already exists. Useful for idempotency and once-only initialization.                                                                                                                  |
-| `mGet` / `mSet` / `mDelete`           | Multi-key variants that round-trip to the primary in a single IPC hop.                                                                                                                                                                |
-| `getRemainingTTL(key)`                | ms until expiry; `Infinity` for keys with no TTL, `0` for missing keys.                                                                                                                                                               |
-| `purgeStale()`                        | Manual sweep of expired entries (replaces the v1 cron-based `prune` option).                                                                                                                                                          |
-| `healthCheck()`                       | Verifies the primary can resolve the namespace and answer requests. Always rejects on failure regardless of `failsafe`.                                                                                                               |
-| `destroy()`                           | Tears down the namespace cache, stats, and primary-side coordination state.                                                                                                                                                           |
-| `stats()`                             | `{ hits, misses, sets, deletes, evictions, size, namespace }` per namespace, no extra wiring.                                                                                                                                         |
-| Size-bounded caches                   | `maxSize` and `maxEntrySize` options; `size` accepted on every write path.                                                                                                                                                            |
-| Structured error transport            | Worker-side rejections carry `name`, `code`, `stack`, and the `cause` chain across IPC. See [Errors](#errors).                                                                                                                        |
-| Generic types                         | `LRUCacheClustered<K, V>` and friends are fully generic; `WrappedCache<K, V>` from `wrap()` re-types the value side.                                                                                                                  |
-| Dual ESM + CJS, Node ≥22              | First-class TypeScript types for both module formats; no transpile step in your build.                                                                                                                                                |
-| Per-call overhead trimmed             | Primary-mode IPC bypass, monotonic request-ID counter (replaces `randomUUID`), no empty-options allocations on calls without options, shorter IPC sentinel. See [Performance profile](#performance-profile).                          |
-
-## Migrating from older releases
-
-Common method and option mappings from older releases:
-
-| Older release                    | Current API                                                 |
-| -------------------------------- | ----------------------------------------------------------- |
-| `del(k)`                         | `delete(k)`                                                 |
-| `reset()`                        | `clear()`                                                   |
-| `prune()`                        | `purgeStale()`                                              |
-| `length()` / `itemCount()`       | `size()`                                                    |
-| `stale(b)`                       | `allowStale(b)`                                             |
-| `maxAge` option                  | `ttl` option                                                |
-| `stale: bool` option             | `allowStale: bool` option                                   |
-| `prune: '*/30 * * * * *'` option | _removed — schedule `purgeStale()` from your own scheduler_ |
-| `parse` / `stringify` options    | _removed — caller serializes_                               |
-| `setObject` / `getObject`        | _removed — caller does `JSON.stringify` themselves_         |
-| `mGetObjects` / `mSetObjects`    | _removed_                                                   |
-| `execute(method, ...args)`       | _removed — call methods directly_                           |
-
-`incr` / `decr` are kept; they remain the cleanest way to do race-safe counters across workers.
-
-The current package name is `@0xdoublesharp/lru-cache-clustered`. The legacy unscoped package name mirrors the same release line.
 
 ## Debugging
 
@@ -327,11 +282,13 @@ DEBUG=lru-cache-clustered-* node app.js
 
 Available namespaces:
 
-- `lru-cache-clustered-primary` — cache creation, registry events
-- `lru-cache-clustered-messages` — every request/response over IPC
+- `lru-cache-clustered-primary` &mdash; cache creation, registry events
+- `lru-cache-clustered-messages` &mdash; every request/response over IPC
 
-Older releases used `lru-cache-for-clusters-as-promised-*`.
+## Upgrading from 1.x
+
+The 2.x line is a TypeScript rewrite on top of `lru-cache@11` with renamed methods and options. See [`docs/migration.md`](./docs/migration.md) for the full method, option, and package mapping, and [`CHANGELOG.md`](./CHANGELOG.md) for the complete 2.0 release notes.
 
 ## License
 
-MIT — see [LICENSE](./LICENSE).
+MIT &mdash; see [LICENSE](./LICENSE).

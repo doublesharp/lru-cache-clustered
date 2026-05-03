@@ -135,6 +135,46 @@ async function handleCommand(cmd: string, args: unknown): Promise<unknown> {
       }
     }
 
+    case 'probeMGetMissing': {
+      // Returns booleans (JSON-safe) so the test can verify the worker's
+      // post-IPC view of mGet without losing the undefined/null distinction
+      // a second time when this response itself crosses cluster IPC.
+      const { options, presentKey, presentValue, missingKey } = args as {
+        options: ConstructorParameters<typeof LRUCacheForClustersAsPromised>[0];
+        presentKey: string;
+        presentValue: string;
+        missingKey: string;
+      };
+      const cache = await LRUCacheForClustersAsPromised.getInstance<string, string>(options);
+      await cache.set(presentKey, presentValue);
+      const map = await cache.mGet([presentKey, missingKey]);
+      const missingValue = map.get(missingKey);
+      return {
+        presentMatches: map.get(presentKey) === presentValue,
+        missingPresent: map.has(missingKey),
+        missingIsUndefined: missingValue === undefined,
+        missingIsNull: missingValue === null,
+      };
+    }
+
+    case 'probeRemainingTTLNoTtl': {
+      // Same shape: report a JSON-safe verdict on whether the worker saw
+      // Infinity for a no-TTL key (the documented contract).
+      const { options, key } = args as {
+        options: ConstructorParameters<typeof LRUCacheForClustersAsPromised>[0];
+        key: string;
+      };
+      const cache = await LRUCacheForClustersAsPromised.getInstance<string, string>(options);
+      await cache.set(key, 'v');
+      const ttl = await cache.getRemainingTTL(key);
+      return {
+        isInfinity: ttl === Infinity,
+        isNull: ttl === null,
+        // Stringify so the literal value survives the response IPC hop too.
+        stringified: String(ttl),
+      };
+    }
+
     case 'getOutcome': {
       const { options, key } = args as {
         options: ConstructorParameters<typeof LRUCacheForClustersAsPromised>[0];
@@ -147,6 +187,39 @@ async function handleCommand(cmd: string, args: unknown): Promise<unknown> {
       } catch (error) {
         const serialized = serializeError(error);
         return { status: 'rejected', ...serialized };
+      }
+    }
+
+    case 'mGetOutcome': {
+      const { options, keys } = args as {
+        options: ConstructorParameters<typeof LRUCacheForClustersAsPromised>[0];
+        keys: string[];
+      };
+      const cache = await LRUCacheForClustersAsPromised.getInstance<string, {}>(options);
+      try {
+        const map = await cache.mGet(keys);
+        return { status: 'resolved', size: map.size, isMap: map instanceof Map };
+      } catch (error) {
+        return { status: 'rejected', ...serializeError(error) };
+      }
+    }
+
+    case 'rttlOutcome': {
+      const { options, key } = args as {
+        options: ConstructorParameters<typeof LRUCacheForClustersAsPromised>[0];
+        key: string;
+      };
+      const cache = await LRUCacheForClustersAsPromised.getInstance<string, {}>(options);
+      try {
+        const value = await cache.getRemainingTTL(key);
+        return {
+          status: 'resolved',
+          isUndefined: value === undefined,
+          isInfinity: value === Infinity,
+          asString: String(value),
+        };
+      } catch (error) {
+        return { status: 'rejected', ...serializeError(error) };
       }
     }
 

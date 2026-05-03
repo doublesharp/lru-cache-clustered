@@ -600,3 +600,44 @@ void test('fetch preserves fetcher errors when abort cleanup also fails', async 
     state.fetchLocks.clear();
   }
 });
+
+// Default cluster IPC uses JSON serialization, which rewrites `undefined`
+// inside arrays to `null`. The mGet wire format is Array<[K, V|undefined]>;
+// without normalization a worker-mode caller would observe `Map<K, null>`
+// for missing keys instead of the documented `Map<K, undefined>`. We
+// exercise the normalization path by injecting `null` at the primary-side
+// handler — equivalent to what the worker would receive over JSON IPC.
+void test('mGet normalizes null pairs to undefined (JSON IPC compatibility)', async () => {
+  caches.clear();
+  const cache = new LRUCacheForClustersAsPromised<string, string>({ namespace: 'mget-null-norm', max: 10 });
+  await cache.set('a', 'A');
+
+  const inner = caches.get('mget-null-norm');
+  assert.ok(inner);
+  const originalGet = inner.get.bind(inner);
+  (inner as { get: (k: string) => unknown }).get = (k) => {
+    if (k === 'missing') return null;
+    return originalGet(k);
+  };
+
+  const got = await cache.mGet(['a', 'missing']);
+  assert.equal(got.get('a'), 'A');
+  assert.equal(got.has('missing'), true);
+  assert.equal(got.get('missing'), undefined);
+});
+
+// JSON.stringify(Infinity) === 'null'. lru-cache@11 returns Infinity for
+// no-TTL entries; over JSON IPC that becomes null on the wire. Validate the
+// normalization restores the documented `Infinity` contract.
+void test('getRemainingTTL normalizes null to Infinity (JSON IPC compatibility)', async () => {
+  caches.clear();
+  const cache = new LRUCacheForClustersAsPromised<string, string>({ namespace: 'rttl-null-norm', max: 10 });
+  await cache.set('k', 'v');
+
+  const inner = caches.get('rttl-null-norm');
+  assert.ok(inner);
+  (inner as { getRemainingTTL: (k: string) => unknown }).getRemainingTTL = () => null;
+
+  const ttl = await cache.getRemainingTTL('k');
+  assert.equal(ttl, Infinity);
+});

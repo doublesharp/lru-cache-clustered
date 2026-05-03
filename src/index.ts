@@ -146,11 +146,20 @@ export class LRUCacheForClustersAsPromised<K extends {} = string, V extends {} =
   }
 
   async mGet(keys: K[]): Promise<Map<K, V | undefined>> {
-    const pairs = await this.#dispatch<Array<[K, V | undefined]>>({
+    const pairs = await this.#dispatch<Array<[K, V | undefined]> | undefined>({
       op: 'mGet',
       keys: keys,
     });
-    return new Map(pairs);
+    const out = new Map<K, V | undefined>();
+    // Default cluster IPC uses JSON serialization, which rewrites
+    // `undefined` inside arrays to `null`. Cache values are non-nullish, so
+    // a null on this wire can only mean "the primary returned undefined for
+    // a missing key". Normalize so the public Map<K, V | undefined> contract
+    // holds in both primary and worker mode. The `?? []` covers the
+    // failsafe='resolve' + IPC timeout case where dispatch resolves to
+    // undefined; matches the previous `new Map(undefined)` empty-Map result.
+    for (const [k, v] of pairs ?? []) out.set(k, v === null ? undefined : v);
+    return out;
   }
   mSet(entries: Iterable<MSetEntry<K, V>>, opts?: WriteOptions) {
     return this.#dispatch<void>({
@@ -207,8 +216,16 @@ export class LRUCacheForClustersAsPromised<K extends {} = string, V extends {} =
     return next;
   }
 
-  getRemainingTTL(key: K) {
-    return this.#dispatch<number>({ op: 'getRemainingTTL', key });
+  async getRemainingTTL(key: K): Promise<number> {
+    // Default cluster IPC uses JSON serialization, which rewrites `Infinity`
+    // (lru-cache@11's "no TTL" sentinel) to `null`. Missing keys return 0,
+    // and any active entry returns a positive number, so a null on this wire
+    // can only mean Infinity. Normalize so the public Promise<number>
+    // contract holds in both primary and worker mode. Strict `=== null` so
+    // failsafe='resolve' timeouts (which dispatch undefined) still propagate
+    // as undefined, matching the pattern for every other op under that mode.
+    const ttl = await this.#dispatch<number | null>({ op: 'getRemainingTTL', key });
+    return ttl === null ? Infinity : ttl;
   }
   setIfAbsent(key: K, value: V, opts?: WriteOptions) {
     return this.#dispatch<boolean>({

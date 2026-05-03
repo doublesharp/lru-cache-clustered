@@ -31,6 +31,18 @@ function setupHarnessPrimary() {
   });
 }
 
+// Default cluster IPC uses JSON serialization, which silently rewrites
+// `undefined` (inside arrays) and `Infinity` to `null`. Most existing tests
+// opt into `'advanced'` (v8.serialize), which preserves both, so this
+// dedicated setup forces the default path to catch JSON-only regressions.
+function setupJsonHarnessPrimary() {
+  cluster.setupPrimary({
+    exec: path.join(here, 'fixtures', 'worker-harness.ts'),
+    execArgv: ['--import', 'tsx'],
+    serialization: 'json',
+  });
+}
+
 async function forkHarnessWorker(): Promise<HarnessWorker> {
   const worker = cluster.fork();
   const pending = new Map<
@@ -335,6 +347,97 @@ void test('cluster: worker timeouts honor failsafe modes over real IPC', { timeo
   }
 });
 
+void test(
+  'cluster: failsafe=resolve timeout returns an empty mGet Map (does not throw)',
+  { timeout: 20_000 },
+  async () => {
+    caches.clear();
+    stats.clear();
+
+    const namespace = 'integration-mget-timeout';
+    const primaryCache = new LRUCacheForClustersAsPromised<string, string>({ namespace, max: 10 });
+    const inner = primaryCache.getCache();
+    assert.ok(inner);
+
+    const originalGet = inner.get.bind(inner);
+    (inner as { get: (key: string) => unknown }).get = (key: string) => {
+      const end = Date.now() + 100;
+      while (Date.now() < end) {
+        // Busy-wait so the worker's IPC timer fires before the response.
+      }
+      return originalGet(key);
+    };
+
+    setupHarnessPrimary();
+    const worker = await forkHarnessWorker();
+
+    try {
+      const result = await worker.send<{ status: string; size?: number; isMap?: boolean }>('mGetOutcome', {
+        options: { namespace, max: 10, timeout: 20, failsafe: 'resolve' },
+        keys: ['a', 'b'],
+      });
+      // Pre-2.0.x mGet relied on `new Map(undefined)` returning an empty Map
+      // when dispatch resolved to undefined under failsafe='resolve' + IPC
+      // timeout. After the JSON-IPC normalization fix, the contract is
+      // preserved: an empty Map, never a thrown TypeError.
+      assert.equal(result.status, 'resolved');
+      assert.equal(result.size, 0);
+      assert.equal(result.isMap, true);
+    } finally {
+      (inner as { get: (key: string) => unknown }).get = originalGet;
+      await worker.stop();
+    }
+  },
+);
+
+void test(
+  'cluster: failsafe=resolve timeout leaves getRemainingTTL undefined (not Infinity)',
+  { timeout: 20_000 },
+  async () => {
+    caches.clear();
+    stats.clear();
+
+    const namespace = 'integration-rttl-timeout';
+    const primaryCache = new LRUCacheForClustersAsPromised<string, string>({ namespace, max: 10 });
+    const inner = primaryCache.getCache();
+    assert.ok(inner);
+
+    const originalRttl = inner.getRemainingTTL.bind(inner);
+    (inner as { getRemainingTTL: (key: string) => unknown }).getRemainingTTL = (key: string) => {
+      const end = Date.now() + 100;
+      while (Date.now() < end) {
+        // Busy-wait so the worker's IPC timer fires before the response.
+      }
+      return originalRttl(key);
+    };
+
+    setupHarnessPrimary();
+    const worker = await forkHarnessWorker();
+
+    try {
+      const result = await worker.send<{
+        status: string;
+        isUndefined?: boolean;
+        isInfinity?: boolean;
+        asString?: string;
+      }>('rttlOutcome', {
+        options: { namespace, max: 10, timeout: 20, failsafe: 'resolve' },
+        key: 'k',
+      });
+      // The JSON-IPC `null → Infinity` normalization must use strict equality
+      // so failsafe='resolve' timeouts (which dispatch undefined) still pass
+      // through as undefined, matching the failsafe pattern across every
+      // other op rather than collapsing into Infinity.
+      assert.equal(result.status, 'resolved');
+      assert.equal(result.isUndefined, true, 'expected undefined under failsafe=resolve timeout');
+      assert.equal(result.isInfinity, false, 'must not coerce timeout-undefined into Infinity');
+    } finally {
+      (inner as { getRemainingTTL: (key: string) => unknown }).getRemainingTTL = originalRttl;
+      await worker.stop();
+    }
+  },
+);
+
 void test('cluster: wrapped caches round-trip encoded Buffers across workers', { timeout: 20_000 }, async () => {
   caches.clear();
   stats.clear();
@@ -367,3 +470,47 @@ void test('cluster: wrapped caches round-trip encoded Buffers across workers', {
     await Promise.allSettled(workers.map((worker) => worker.stop()));
   }
 });
+
+void test(
+  'cluster (default JSON IPC): mGet preserves undefined for missing keys, getRemainingTTL preserves Infinity',
+  { timeout: 20_000 },
+  async () => {
+    caches.clear();
+    stats.clear();
+
+    setupJsonHarnessPrimary();
+    const worker = await forkHarnessWorker();
+
+    try {
+      const mget = await worker.send<{
+        presentMatches: boolean;
+        missingPresent: boolean;
+        missingIsUndefined: boolean;
+        missingIsNull: boolean;
+      }>('probeMGetMissing', {
+        options: { namespace: 'integration-json-mget', max: 10 },
+        presentKey: 'a',
+        presentValue: 'A',
+        missingKey: 'missing',
+      });
+      assert.equal(mget.presentMatches, true, 'present key should round-trip its value');
+      assert.equal(mget.missingPresent, true, 'missing key must still be in the result map');
+      assert.equal(mget.missingIsUndefined, true, 'missing-key value must normalize to undefined');
+      assert.equal(mget.missingIsNull, false, 'missing-key value must not surface as null');
+
+      const rttl = await worker.send<{
+        isInfinity: boolean;
+        isNull: boolean;
+        stringified: string;
+      }>('probeRemainingTTLNoTtl', {
+        options: { namespace: 'integration-json-rttl', max: 10 },
+        key: 'k',
+      });
+      assert.equal(rttl.isInfinity, true, 'no-TTL key must report Infinity');
+      assert.equal(rttl.isNull, false, 'no-TTL key must not surface as null');
+      assert.equal(rttl.stringified, 'Infinity');
+    } finally {
+      await worker.stop();
+    }
+  },
+);

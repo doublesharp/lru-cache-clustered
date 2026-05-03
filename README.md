@@ -4,8 +4,6 @@
 
 <h1 align="center">@0xdoublesharp/lru-cache-clustered</h1>
 
-<p align="center"><em>One LRU cache. Every worker. No Redis required.</em></p>
-
 <p align="center"><sub>Pikas cache hay for the winter. This package caches everything else.</sub></p>
 
 <p align="center">

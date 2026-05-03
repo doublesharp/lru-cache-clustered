@@ -8,3 +8,6 @@ coverage/
 
 # Working artifacts — see project memory
 docs/superpowers/
+
+# Git worktrees
+.worktrees/

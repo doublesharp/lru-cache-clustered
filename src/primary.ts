@@ -48,6 +48,7 @@ type PrimaryState = {
   caches: Map<string, AnyCache>;
   stats: Map<string, Stats>;
   fetchLocks: Map<string, Map<NonNullish, FetchLock>>;
+  versions: Map<string, number>;
   clusterListenerInstalled: boolean;
   nextFetchToken: number;
 };
@@ -60,13 +61,25 @@ const primaryState = ((globalThis as Record<PropertyKey, unknown>)[STATE_KEY] ??
   caches: new Map<string, AnyCache>(),
   stats: new Map<string, Stats>(),
   fetchLocks: new Map<string, Map<NonNullish, FetchLock>>(),
+  versions: new Map<string, number>(),
   clusterListenerInstalled: false,
   nextFetchToken: 0,
 }) as PrimaryState;
 
 export const caches = primaryState.caches;
 export const stats = primaryState.stats;
+export const versions = primaryState.versions;
 const fetchLocks = primaryState.fetchLocks;
+
+export function getNamespaceVersion(namespace: string): number {
+  return primaryState.versions.get(namespace) ?? 0;
+}
+
+function bumpNamespaceVersion(namespace: string): number {
+  const next = (primaryState.versions.get(namespace) ?? 0) + 1;
+  primaryState.versions.set(namespace, next);
+  return next;
+}
 
 function freshStats(namespace: string): Stats {
   return { namespace, hits: 0, misses: 0, sets: 0, deletes: 0, evictions: 0, size: 0 };
@@ -257,6 +270,7 @@ export function dispatchOp(namespace: string, payload: ExecPayload, context: Dis
         buildSetOptions({ ttl: payload.ttl, size: payload.size }),
       );
       getStats(namespace).sets += 1;
+      bumpNamespaceVersion(namespace);
       return true;
     }
     case 'setIfAbsent': {
@@ -272,12 +286,16 @@ export function dispatchOp(namespace: string, payload: ExecPayload, context: Dis
         buildSetOptions({ ttl: payload.ttl, size: payload.size }),
       );
       getStats(namespace).sets += 1;
+      bumpNamespaceVersion(namespace);
       return true;
     }
     case 'delete': {
       const cache = getCacheForPayload(namespace, payload);
       const deleted = cache.delete(requireNonNullish('cache key', payload.key));
-      if (deleted) getStats(namespace).deletes += 1;
+      if (deleted) {
+        getStats(namespace).deletes += 1;
+        bumpNamespaceVersion(namespace);
+      }
       return deleted;
     }
     case 'has':
@@ -288,6 +306,7 @@ export function dispatchOp(namespace: string, payload: ExecPayload, context: Dis
       return getCacheForPayload(namespace, payload).getRemainingTTL(requireNonNullish('cache key', payload.key));
     case 'clear':
       getCacheForPayload(namespace, payload).clear();
+      bumpNamespaceVersion(namespace);
       return undefined;
     case 'mGet': {
       const cache = getCacheForPayload(namespace, payload);
@@ -313,6 +332,7 @@ export function dispatchOp(namespace: string, payload: ExecPayload, context: Dis
         );
         s.sets += 1;
       }
+      bumpNamespaceVersion(namespace);
       return undefined;
     }
     case 'mDelete': {
@@ -321,6 +341,7 @@ export function dispatchOp(namespace: string, payload: ExecPayload, context: Dis
       for (const key of payload.keys) {
         if (cache.delete(requireNonNullish('cache key', key))) s.deletes += 1;
       }
+      bumpNamespaceVersion(namespace);
       return undefined;
     }
     case 'keys':
@@ -340,6 +361,7 @@ export function dispatchOp(namespace: string, payload: ExecPayload, context: Dis
         return [safeKey, entry] as [NonNullish, LRUCache.Entry<NonNullish>];
       });
       cache.load(entries);
+      bumpNamespaceVersion(namespace);
       return undefined;
     }
     case 'size':
@@ -350,8 +372,11 @@ export function dispatchOp(namespace: string, payload: ExecPayload, context: Dis
       s.size = cache.size;
       return { ...s };
     }
-    case 'purgeStale':
-      return getCacheForPayload(namespace, payload).purgeStale();
+    case 'purgeStale': {
+      const purged = getCacheForPayload(namespace, payload).purgeStale();
+      if (purged) bumpNamespaceVersion(namespace);
+      return purged;
+    }
     case 'incr':
     case 'decr': {
       const cache = getCacheForPayload(namespace, payload);
@@ -380,6 +405,7 @@ export function dispatchOp(namespace: string, payload: ExecPayload, context: Dis
       );
       cache.set(key, next, setOpts);
       getStats(namespace).sets += 1;
+      bumpNamespaceVersion(namespace);
       return next;
     }
     case 'fetchClaim': {
@@ -415,6 +441,7 @@ export function dispatchOp(namespace: string, payload: ExecPayload, context: Dis
       locks?.delete(key);
       cleanupFetchNamespaceLocks(namespace);
       getStats(namespace).sets += 1;
+      bumpNamespaceVersion(namespace);
       return true;
     }
     case 'fetchAbort': {
@@ -442,6 +469,7 @@ export function dispatchOp(namespace: string, payload: ExecPayload, context: Dis
         const replacement = buildCache(opts, s);
         replacement.load(cache.dump());
         caches.set(namespace, replacement);
+        bumpNamespaceVersion(namespace);
         return replacement.max;
       }
       return cache.max;
@@ -476,14 +504,15 @@ export function handleRequest(request: Request, context: DispatchContext = {}): 
     return err(request, 'invalid request: missing required fields');
   }
   try {
-    return ok(request, dispatchOp(request.namespace, request, context));
+    const value = dispatchOp(request.namespace, request, context);
+    return ok(request, value, getNamespaceVersion(request.namespace));
   } catch (e) {
     return err(request, e);
   }
 }
 
-function ok(request: Request, value: unknown): Response {
-  return { id: request.id, source: SOURCE, ok: true, value, version: 0 };
+function ok(request: Request, value: unknown, version: number): Response {
+  return { id: request.id, source: SOURCE, ok: true, value, version };
 }
 function err(request: unknown, cause: unknown): Response {
   const id =

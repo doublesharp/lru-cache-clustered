@@ -1198,3 +1198,38 @@ void test('handleRequest returns version=0 in success responses (pre-L1 floor)',
     assert.equal(response.version, 0);
   }
 });
+
+void test('mutating ops bump per-namespace version monotonically', async () => {
+  const { handleRequest } = await import('../src/primary.ts');
+  const namespace = 'version-bump';
+  // Init does not bump (it is a setup op)
+  const init = handleRequest({ id: '1', namespace, source: 'lcfcap', op: 'init', options: { max: 8 } });
+  assert.equal(init.ok && init.version, 0);
+
+  const set1 = handleRequest({ id: '2', namespace, source: 'lcfcap', op: 'set', key: 'a', value: 1 });
+  assert.equal(set1.ok && set1.version, 1);
+
+  const get1 = handleRequest({ id: '3', namespace, source: 'lcfcap', op: 'get', key: 'a' });
+  // Reads do not bump but they do report current version
+  assert.equal(get1.ok && get1.version, 1);
+
+  const del1 = handleRequest({ id: '4', namespace, source: 'lcfcap', op: 'delete', key: 'a' });
+  // Delete-of-present bumps to 2
+  assert.equal(del1.ok && del1.version, 2);
+
+  const del2 = handleRequest({ id: '5', namespace, source: 'lcfcap', op: 'delete', key: 'a' });
+  // Delete-of-missing does NOT bump; stays at 2
+  assert.equal(del2.ok && del2.version, 2);
+});
+
+void test('versions are per-namespace, not global', async () => {
+  const { handleRequest } = await import('../src/primary.ts');
+  const a = 'ns-a';
+  const b = 'ns-b';
+  handleRequest({ id: '1', namespace: a, source: 'lcfcap', op: 'init', options: { max: 4 } });
+  handleRequest({ id: '2', namespace: b, source: 'lcfcap', op: 'init', options: { max: 4 } });
+  const r1 = handleRequest({ id: '3', namespace: a, source: 'lcfcap', op: 'set', key: 'x', value: 1 });
+  const r2 = handleRequest({ id: '4', namespace: b, source: 'lcfcap', op: 'get', key: 'x' });
+  assert.equal(r1.ok && r1.version, 1);
+  assert.equal(r2.ok && r2.version, 0);
+});

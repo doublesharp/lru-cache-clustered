@@ -28,6 +28,10 @@ type RequestPayload = DistributiveOmit<Request, 'id' | 'namespace' | 'source'>;
 
 interface IpcClient {
   sendToPrimary: <T = unknown>(opts: SendOptions, payload: RequestPayload) => Promise<T>;
+  sendToPrimaryWithMeta: <T = unknown>(
+    opts: SendOptions,
+    payload: RequestPayload,
+  ) => Promise<{ value: T; version: number }>;
 }
 
 export function createIpcClient(proc: ProcessLike): IpcClient {
@@ -41,45 +45,51 @@ export function createIpcClient(proc: ProcessLike): IpcClient {
     cb(raw);
   });
 
-  return {
-    sendToPrimary<T>(opts: SendOptions, payload: RequestPayload): Promise<T> {
-      const id = String(++nextRequestId);
-      const request = { id, namespace: opts.namespace, source: SOURCE, ...payload } as Request;
+  function send<T>(opts: SendOptions, payload: RequestPayload): Promise<{ value: T; version: number }> {
+    const id = String(++nextRequestId);
+    const request = { id, namespace: opts.namespace, source: SOURCE, ...payload } as Request;
 
-      return new Promise<T>((resolve, reject) => {
-        const timer = setTimeout(() => {
-          callbacks.delete(id);
-          if (opts.failsafe === 'reject') reject(new Error('IPC timeout'));
-          else resolve(undefined as T);
-        }, opts.timeout);
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        callbacks.delete(id);
+        if (opts.failsafe === 'reject') reject(new Error('IPC timeout'));
+        else resolve({ value: undefined as T, version: 0 });
+      }, opts.timeout);
 
-        callbacks.set(id, (response) => {
-          clearTimeout(timer);
-          if (response.ok) resolve(response.value as T);
-          else reject(deserializeError(response.error));
-        });
-
-        messagesDebug('worker -> primary', request);
-        try {
-          // proc.send returns false when the IPC channel is full
-          // (backpressure). The message is silently dropped, so the response
-          // would never arrive and the caller would block until the timeout
-          // fires. Fast-fail here so backpressure surfaces immediately under
-          // the configured failsafe.
-          const sent = proc.send(request);
-          if (sent === false) {
-            clearTimeout(timer);
-            callbacks.delete(id);
-            if (opts.failsafe === 'reject') reject(new Error('IPC backpressure'));
-            else resolve(undefined as T);
-          }
-        } catch (error) {
-          clearTimeout(timer);
-          callbacks.delete(id);
-          reject(error instanceof Error ? error : new Error(String(error)));
-        }
+      callbacks.set(id, (response) => {
+        clearTimeout(timer);
+        if (response.ok) resolve({ value: response.value as T, version: response.version ?? 0 });
+        else reject(deserializeError(response.error));
       });
+
+      messagesDebug('worker -> primary', request);
+      try {
+        // proc.send returns false when the IPC channel is full
+        // (backpressure). The message is silently dropped, so the response
+        // would never arrive and the caller would block until the timeout
+        // fires. Fast-fail here so backpressure surfaces immediately under
+        // the configured failsafe.
+        const sent = proc.send(request);
+        if (sent === false) {
+          clearTimeout(timer);
+          callbacks.delete(id);
+          if (opts.failsafe === 'reject') reject(new Error('IPC backpressure'));
+          else resolve({ value: undefined as T, version: 0 });
+        }
+      } catch (error) {
+        clearTimeout(timer);
+        callbacks.delete(id);
+        reject(error instanceof Error ? error : new Error(String(error)));
+      }
+    });
+  }
+
+  return {
+    async sendToPrimary<T>(opts: SendOptions, payload: RequestPayload): Promise<T> {
+      const r = await send<T>(opts, payload);
+      return r.value;
     },
+    sendToPrimaryWithMeta: <T>(opts: SendOptions, payload: RequestPayload) => send<T>(opts, payload),
   };
 }
 

@@ -231,6 +231,47 @@ void test('getDefaultClient throws when process.send is unavailable (primary mod
   }
 });
 
+void test('sendToPrimaryWithMeta exposes the version from the response', async () => {
+  const { createIpcClient } = await import('../src/worker.ts');
+  const sent: unknown[] = [];
+  let resolveResponse: (raw: unknown) => void = () => {};
+  const proc = {
+    send(msg: unknown) {
+      sent.push(msg);
+      return true;
+    },
+    on(_e: 'message', cb: (msg: unknown) => void) {
+      resolveResponse = cb;
+    },
+  };
+  const client = createIpcClient(proc);
+  const p = client.sendToPrimaryWithMeta<number>(
+    { namespace: 'test', timeout: 1000, failsafe: 'reject' },
+    { op: 'get', key: 'a' },
+  );
+  // Drive the response back manually
+  const id = (sent[0] as { id: string }).id;
+  resolveResponse({ id, source: 'lcfcap', ok: true, value: 42, version: 7 });
+  const r = await p;
+  assert.equal(r.value, 42);
+  assert.equal(r.version, 7);
+});
+
+void test('sendToPrimaryWithMeta on timeout with failsafe=resolve returns version=0', async () => {
+  const { createIpcClient } = await import('../src/worker.ts');
+  const proc = {
+    send: (_msg: unknown) => true,
+    on: (_e: 'message', _cb: (msg: unknown) => void) => {},
+  };
+  const client = createIpcClient(proc);
+  const r = await client.sendToPrimaryWithMeta<number>(
+    { namespace: 'test', timeout: 5, failsafe: 'resolve' },
+    { op: 'get', key: 'a' },
+  );
+  assert.equal(r.value, undefined);
+  assert.equal(r.version, 0);
+});
+
 void test('getDefaultClient lazily creates and caches a real client when process.send exists', () => {
   // eslint-disable-next-line @typescript-eslint/unbound-method
   const originalSend = process.send;

@@ -68,7 +68,7 @@ type SerializedError = {
 };
 
 export type Response = { id: string; source: Source } & (
-  | { ok: true; value: unknown }
+  | { ok: true; value: unknown; version?: number }
   | { ok: false; error: SerializedError }
 );
 

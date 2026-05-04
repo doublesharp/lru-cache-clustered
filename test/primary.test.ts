@@ -59,6 +59,7 @@ void test('handleRequest op=init creates cache and returns ok', () => {
     source: SOURCE,
     ok: true,
     value: { namespace: 'ns-init', isNew: true, max: 7 },
+    version: 0,
   });
   assert.ok(caches.has('ns-init'));
 });
@@ -1180,4 +1181,20 @@ void test('deserializeError round-trips through serialize', () => {
   const cause = (reconstructed as { cause?: Error }).cause;
   assert.ok(cause instanceof Error);
   assert.equal(cause.message, 'the-cause');
+});
+
+void test('handleRequest returns version=0 in success responses (pre-L1 floor)', async () => {
+  const { handleRequest } = await import('../src/primary.ts');
+  const response = handleRequest({
+    id: 'r1',
+    namespace: 'version-floor',
+    source: 'lcfcap',
+    op: 'init',
+    options: { max: 4 },
+  });
+  assert.equal(response.ok, true);
+  if (response.ok) {
+    assert.equal(typeof response.version, 'number');
+    assert.equal(response.version, 0);
+  }
 });

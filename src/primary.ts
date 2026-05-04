@@ -483,7 +483,7 @@ export function handleRequest(request: Request, context: DispatchContext = {}): 
 }
 
 function ok(request: Request, value: unknown): Response {
-  return { id: request.id, source: SOURCE, ok: true, value };
+  return { id: request.id, source: SOURCE, ok: true, value, version: 0 };
 }
 function err(request: unknown, cause: unknown): Response {
   const id =

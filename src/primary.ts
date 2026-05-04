@@ -243,7 +243,7 @@ export function dispatchOp(namespace: string, payload: ExecPayload, context: Dis
     case 'init': {
       const isNew = !caches.has(namespace);
       const cache = getOrCreateCache(namespace, payload.options);
-      return { namespace, isNew, max: cache.max };
+      return { namespace, isNew, max: cache.max, version: getNamespaceVersion(namespace) };
     }
     case 'healthCheck':
       getOrCreateCache(namespace, payload.cacheOptions);

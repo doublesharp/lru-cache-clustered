@@ -58,7 +58,7 @@ void test('handleRequest op=init creates cache and returns ok', () => {
     id: 'req-1',
     source: SOURCE,
     ok: true,
-    value: { namespace: 'ns-init', isNew: true, max: 7 },
+    value: { namespace: 'ns-init', isNew: true, max: 7, version: 0 },
     version: 0,
   });
   assert.ok(caches.has('ns-init'));
@@ -73,6 +73,7 @@ void test('handleRequest op=init reuses cache and returns isNew=false', () => {
     namespace: 'ns-init',
     isNew: false,
     max: 7,
+    version: 0,
   });
 });
 
@@ -99,6 +100,7 @@ void test('handleRequest op=init ignores explicitly undefined options on reuse',
     namespace: 'ns-init',
     isNew: false,
     max: 7,
+    version: 0,
   });
 });
 
@@ -1232,4 +1234,22 @@ void test('versions are per-namespace, not global', async () => {
   const r2 = handleRequest({ id: '4', namespace: b, source: 'lcfcap', op: 'get', key: 'x' });
   assert.equal(r1.ok && r1.version, 1);
   assert.equal(r2.ok && r2.version, 0);
+});
+
+void test('init response value includes the current namespace version', async () => {
+  const { handleRequest } = await import('../src/primary.ts');
+  const namespace = 'init-version';
+  // Bump twice on this namespace to confirm we read this namespace's version
+  handleRequest({ id: 'a', namespace, source: 'lcfcap', op: 'init', options: { max: 4 } });
+  handleRequest({ id: 'b', namespace, source: 'lcfcap', op: 'set', key: 'x', value: 1 });
+  handleRequest({ id: 'c', namespace, source: 'lcfcap', op: 'set', key: 'y', value: 2 });
+  // A "second init" (e.g. a worker joining late) should see version=2
+  const r = handleRequest({ id: 'd', namespace, source: 'lcfcap', op: 'init', options: { max: 4 } });
+  assert.equal(r.ok, true);
+  if (r.ok) {
+    const value = r.value as { namespace: string; isNew: boolean; max: number; version: number };
+    assert.equal(value.version, 2);
+    assert.equal(value.namespace, namespace);
+    assert.equal(value.isNew, false);
+  }
 });

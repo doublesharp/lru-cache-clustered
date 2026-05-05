@@ -69,7 +69,7 @@ void test('worker-mode L1 reacts to invalidateLocal (proxy for the broadcast han
   const c = new LRUCacheForClustersAsPromised<string, number>({
     namespace: 'l1-sub',
     max: 10,
-    localL1: { enabled: true, ttl: 1000 },
+    localL1: { enabled: true, experimental: true, ttl: 1000 },
   });
   await c.set('a', 1);
   await c.get('a'); // populate
@@ -82,7 +82,7 @@ void test('fetch leader populates own L1 after fetcher success', async () => {
   const c = new LRUCacheForClustersAsPromised<string, number>({
     namespace: 'l1-fetch',
     max: 10,
-    localL1: { enabled: true, ttl: 1000 },
+    localL1: { enabled: true, experimental: true, ttl: 1000 },
   });
   let calls = 0;
   const v = await c.fetch('k', async () => {
@@ -105,7 +105,7 @@ void test('fetch with bypassL1 forces a primary read but still single-flights', 
   const c = new LRUCacheForClustersAsPromised<string, number>({
     namespace: 'l1-fetch-bypass',
     max: 10,
-    localL1: { enabled: true, ttl: 1000 },
+    localL1: { enabled: true, experimental: true, ttl: 1000 },
   });
   let calls = 0;
   await c.fetch('k', async () => {

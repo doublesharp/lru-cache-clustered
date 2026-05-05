@@ -88,6 +88,11 @@ function normalizeL1(
   if (raw === undefined || raw === false) return undefined;
   const opts: LocalL1Options = raw === true ? { enabled: true } : raw;
   if (opts.enabled === false) return undefined;
+  if (!opts.experimental) {
+    throw new Error(
+      'localL1 is experimental in v2.1.0. Pass `localL1: { enabled: true, experimental: true }` to opt in.',
+    );
+  }
 
   // Default L1 ttl: min(primaryTtl * 0.1, 5000), with 100ms floor.
   // If primary ttl is unset, default to 5000.

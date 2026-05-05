@@ -643,7 +643,11 @@ void test('getRemainingTTL normalizes null to Infinity (JSON IPC compatibility)'
 });
 
 void test('constructor accepts localL1 option (boolean shorthand)', () => {
-  const c = new LRUCacheForClustersAsPromised({ namespace: 'l1-bool', max: 10, localL1: true });
+  const c = new LRUCacheForClustersAsPromised({
+    namespace: 'l1-bool',
+    max: 10,
+    localL1: { enabled: true, experimental: true },
+  });
   const stats = c.localStats();
   assert.notEqual(stats, undefined);
   if (stats) {
@@ -657,7 +661,7 @@ void test('constructor accepts localL1 option (object form)', () => {
     namespace: 'l1-obj',
     max: 10,
     ttl: 60_000,
-    localL1: { enabled: true, max: 100, ttl: 1000 },
+    localL1: { enabled: true, experimental: true, max: 100, ttl: 1000 },
   });
   assert.notEqual(c.localStats(), undefined);
 });
@@ -673,7 +677,7 @@ void test('localL1 ttl clamps to primary ttl when greater', () => {
     namespace: 'l1-clamp',
     max: 10,
     ttl: 1000,
-    localL1: { enabled: true, ttl: 5000 },
+    localL1: { enabled: true, experimental: true, ttl: 5000 },
   });
   assert.notEqual(c.localStats(), undefined);
 });
@@ -692,7 +696,7 @@ void test('get with L1 enabled hits L1 on second read in primary mode', async ()
   const c = new LRUCacheForClustersAsPromised<string, number>({
     namespace: 'l1-get',
     max: 10,
-    localL1: { enabled: true, ttl: 1000 },
+    localL1: { enabled: true, experimental: true, ttl: 1000 },
   });
   await c.set('a', 1);
   // First read: L1 miss, populates from primary
@@ -715,7 +719,7 @@ void test('get with bypassL1: true skips L1 entirely', async () => {
   const c = new LRUCacheForClustersAsPromised<string, number>({
     namespace: 'l1-bypass',
     max: 10,
-    localL1: { enabled: true, ttl: 1000 },
+    localL1: { enabled: true, experimental: true, ttl: 1000 },
   });
   await c.set('a', 1);
   await c.get('a'); // populate
@@ -729,7 +733,7 @@ void test('get returns undefined for missing key without populating L1', async (
   const c = new LRUCacheForClustersAsPromised<string, number>({
     namespace: 'l1-miss',
     max: 10,
-    localL1: { enabled: true, ttl: 1000 },
+    localL1: { enabled: true, experimental: true, ttl: 1000 },
   });
   assert.equal(await c.get('nope'), undefined);
   assert.equal(c.localStats()?.size, 0); // no negative caching in v1
@@ -739,7 +743,7 @@ void test('set self-invalidates the calling worker L1 entry', async () => {
   const c = new LRUCacheForClustersAsPromised<string, number>({
     namespace: 'l1-self-inv',
     max: 10,
-    localL1: { enabled: true, ttl: 1000 },
+    localL1: { enabled: true, experimental: true, ttl: 1000 },
   });
   await c.set('a', 1);
   await c.get('a'); // populates L1
@@ -753,7 +757,7 @@ void test('has with L1 enabled hits L1 after a populating get', async () => {
   const c = new LRUCacheForClustersAsPromised<string, number>({
     namespace: 'l1-has',
     max: 10,
-    localL1: { enabled: true, ttl: 1000 },
+    localL1: { enabled: true, experimental: true, ttl: 1000 },
   });
   await c.set('a', 1);
   await c.get('a'); // populate
@@ -767,7 +771,7 @@ void test('peek with L1 enabled hits L1 (peek is a read)', async () => {
   const c = new LRUCacheForClustersAsPromised<string, number>({
     namespace: 'l1-peek',
     max: 10,
-    localL1: { enabled: true, ttl: 1000 },
+    localL1: { enabled: true, experimental: true, ttl: 1000 },
   });
   await c.set('a', 1);
   await c.get('a'); // populate
@@ -781,7 +785,7 @@ void test('delete self-invalidates and advances latestSeen', async () => {
   const c = new LRUCacheForClustersAsPromised<string, number>({
     namespace: 'l1-del',
     max: 10,
-    localL1: { enabled: true, ttl: 1000 },
+    localL1: { enabled: true, experimental: true, ttl: 1000 },
   });
   await c.set('a', 1);
   await c.get('a');
@@ -793,7 +797,7 @@ void test('clear wipes the local L1 too', async () => {
   const c = new LRUCacheForClustersAsPromised<string, number>({
     namespace: 'l1-clear',
     max: 10,
-    localL1: { enabled: true, ttl: 1000 },
+    localL1: { enabled: true, experimental: true, ttl: 1000 },
   });
   await c.set('a', 1);
   await c.set('b', 2);
@@ -808,7 +812,7 @@ void test('setIfAbsent self-invalidates regardless of outcome', async () => {
   const c = new LRUCacheForClustersAsPromised<string, number>({
     namespace: 'l1-sia',
     max: 10,
-    localL1: { enabled: true, ttl: 1000 },
+    localL1: { enabled: true, experimental: true, ttl: 1000 },
   });
   await c.set('a', 1);
   await c.get('a'); // populate
@@ -824,7 +828,7 @@ void test('mGet with L1 hits each present key in L1 after populate', async () =>
   const c = new LRUCacheForClustersAsPromised<string, number>({
     namespace: 'l1-mget',
     max: 10,
-    localL1: { enabled: true, ttl: 1000 },
+    localL1: { enabled: true, experimental: true, ttl: 1000 },
   });
   await c.set('a', 1);
   await c.set('b', 2);
@@ -841,7 +845,7 @@ void test('mSet bulk-clears local L1', async () => {
   const c = new LRUCacheForClustersAsPromised<string, number>({
     namespace: 'l1-mset',
     max: 10,
-    localL1: { enabled: true, ttl: 1000 },
+    localL1: { enabled: true, experimental: true, ttl: 1000 },
   });
   await c.set('a', 1);
   await c.get('a'); // populate
@@ -857,7 +861,7 @@ void test('incr self-invalidates own L1 entry on the calling worker', async () =
   const c = new LRUCacheForClustersAsPromised<string, number>({
     namespace: 'l1-incr',
     max: 10,
-    localL1: { enabled: true, ttl: 1000 },
+    localL1: { enabled: true, experimental: true, ttl: 1000 },
   });
   await c.set('count', 5);
   await c.get('count'); // populate L1 with stale value
@@ -871,7 +875,7 @@ void test('withoutLocal() routes reads past L1', async () => {
   const c = new LRUCacheForClustersAsPromised<string, number>({
     namespace: 'l1-without',
     max: 10,
-    localL1: { enabled: true, ttl: 1000 },
+    localL1: { enabled: true, experimental: true, ttl: 1000 },
   });
   await c.set('a', 1);
   await c.get('a'); // populate L1
@@ -886,7 +890,7 @@ void test('withoutLocal().set still self-invalidates the underlying L1', async (
   const c = new LRUCacheForClustersAsPromised<string, number>({
     namespace: 'l1-without-set',
     max: 10,
-    localL1: { enabled: true, ttl: 1000 },
+    localL1: { enabled: true, experimental: true, ttl: 1000 },
   });
   await c.set('a', 1);
   await c.get('a'); // populate
@@ -902,7 +906,7 @@ void test('withoutLocal() is idempotent', async () => {
   const c = new LRUCacheForClustersAsPromised<string, number>({
     namespace: 'l1-without-idem',
     max: 10,
-    localL1: { enabled: true, ttl: 1000 },
+    localL1: { enabled: true, experimental: true, ttl: 1000 },
   });
   const a = c.withoutLocal();
   const b = a.withoutLocal();
@@ -914,7 +918,7 @@ void test('l1:hit and l1:miss events fire', async () => {
   const c = new LRUCacheForClustersAsPromised<string, number>({
     namespace: 'l1-events',
     max: 10,
-    localL1: { enabled: true, ttl: 1000 },
+    localL1: { enabled: true, experimental: true, ttl: 1000 },
   });
   const events: Array<{ name: string; payload: unknown }> = [];
   c.on('l1:hit', (p) => events.push({ name: 'l1:hit', payload: p }));
@@ -931,7 +935,7 @@ void test('l1:invalidate event fires on set self-invalidate', async () => {
   const c = new LRUCacheForClustersAsPromised<string, number>({
     namespace: 'l1-inv-evt',
     max: 10,
-    localL1: { enabled: true, ttl: 1000 },
+    localL1: { enabled: true, experimental: true, ttl: 1000 },
   });
   await c.set('a', 1);
   await c.get('a');
@@ -945,7 +949,7 @@ void test('off() removes a listener', () => {
   const c = new LRUCacheForClustersAsPromised<string, number>({
     namespace: 'l1-off-evt',
     max: 10,
-    localL1: { enabled: true, ttl: 1000 },
+    localL1: { enabled: true, experimental: true, ttl: 1000 },
   });
   let count = 0;
   const handler = () => {
@@ -956,4 +960,25 @@ void test('off() removes a listener', () => {
   // Trigger a miss
   void c.get('nope').catch(() => {});
   assert.equal(count, 0);
+});
+
+void test('localL1 enabled without experimental: true throws', () => {
+  assert.throws(
+    () =>
+      new LRUCacheForClustersAsPromised({
+        namespace: 'l1-gated',
+        max: 10,
+        localL1: { enabled: true, ttl: 1000 },
+      }),
+    /experimental/i,
+  );
+});
+
+void test('localL1 enabled with experimental: true works', () => {
+  const c = new LRUCacheForClustersAsPromised({
+    namespace: 'l1-gated-ok',
+    max: 10,
+    localL1: { enabled: true, experimental: true, ttl: 1000 },
+  });
+  assert.notEqual(c.localStats(), undefined);
 });

@@ -82,7 +82,12 @@ void test(
     const a = await forkWorker();
     const b = await forkWorker();
 
-    const opts = { namespace: 'l1-xworker', max: 100, ttl: 60_000, localL1: { enabled: true, ttl: 5_000 } };
+    const opts = {
+      namespace: 'l1-xworker',
+      max: 100,
+      ttl: 60_000,
+      localL1: { enabled: true, experimental: true, ttl: 5_000 },
+    };
 
     try {
       // B writes initial value
@@ -110,7 +115,7 @@ void test('incr from N workers: final count correct, no L1 race', { timeout: 15_
 
   const N = 4;
   const workers = await Promise.all(Array.from({ length: N }, () => forkWorker()));
-  const opts = { namespace: 'l1-incr', max: 10, localL1: { enabled: true, ttl: 1_000 } };
+  const opts = { namespace: 'l1-incr', max: 10, localL1: { enabled: true, experimental: true, ttl: 1_000 } };
 
   try {
     const PER = 50;
@@ -133,7 +138,7 @@ void test('clear from primary invalidates L1 in all workers', { timeout: 15_000 
 
   const a = await forkWorker();
   const b = await forkWorker();
-  const opts = { namespace: 'l1-clear-all', max: 100, localL1: { enabled: true, ttl: 5_000 } };
+  const opts = { namespace: 'l1-clear-all', max: 100, localL1: { enabled: true, experimental: true, ttl: 5_000 } };
 
   try {
     await a.send('set', { options: opts, key: 'k1', value: 'v1' });

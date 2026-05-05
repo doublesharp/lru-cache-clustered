@@ -293,3 +293,55 @@ void test('getDefaultClient lazily creates and caches a real client when process
     (process as { send?: unknown }).send = originalSend;
   }
 });
+
+void test('subscribeInvalidations delivers pushes filtered by namespace', async () => {
+  const { createIpcClient } = await import('../src/worker.ts');
+  let listener: ((msg: unknown) => void) | undefined;
+  const proc = {
+    send: () => true,
+    on(_e: 'message', cb: (msg: unknown) => void) {
+      listener = cb;
+    },
+  };
+  const client = createIpcClient(proc);
+
+  const a: unknown[] = [];
+  const b: unknown[] = [];
+  const unsubA = client.subscribeInvalidations('alpha', (m) => a.push(m));
+  client.subscribeInvalidations('beta', (m) => b.push(m));
+
+  // Push to alpha
+  listener?.({ source: 'lcfcap', push: 'l1:invalidate', namespace: 'alpha', key: 'k', version: 5 });
+  listener?.({ source: 'lcfcap', push: 'l1:invalidate', namespace: 'beta', key: 'k', version: 6 });
+  // Push without our SOURCE - should be ignored
+  listener?.({ source: 'other', push: 'l1:invalidate', namespace: 'alpha', key: 'k', version: 7 });
+  // Plain response - should not deliver to invalidation handlers
+  listener?.({ id: '1', source: 'lcfcap', ok: true, value: 1, version: 1 });
+
+  assert.equal(a.length, 1);
+  assert.equal(b.length, 1);
+
+  unsubA();
+  listener?.({ source: 'lcfcap', push: 'l1:invalidate', namespace: 'alpha', key: 'k', version: 8 });
+  assert.equal(a.length, 1, 'unsubscribe stopped delivery');
+});
+
+void test('subscribeInvalidations: namespace-wide push delivered to that namespaces subscribers', async () => {
+  const { createIpcClient } = await import('../src/worker.ts');
+  let listener: ((msg: unknown) => void) | undefined;
+  const proc = {
+    send: () => true,
+    on(_e: 'message', cb: (msg: unknown) => void) {
+      listener = cb;
+    },
+  };
+  const client = createIpcClient(proc);
+  const got: unknown[] = [];
+  client.subscribeInvalidations('users', (m) => got.push(m));
+
+  listener?.({ source: 'lcfcap', push: 'l1:invalidate-namespace', namespace: 'users', version: 42 });
+  assert.equal(got.length, 1);
+  const msg = got[0] as { push: string; version: number };
+  assert.equal(msg.push, 'l1:invalidate-namespace');
+  assert.equal(msg.version, 42);
+});

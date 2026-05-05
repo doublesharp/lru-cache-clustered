@@ -1,6 +1,14 @@
 import { setTimeout, clearTimeout } from 'node:timers';
 import Debug from 'debug';
-import { DEBUG_PREFIX, SOURCE, deserializeError, type Request, type Response } from './messages.js';
+import {
+  DEBUG_PREFIX,
+  SOURCE,
+  deserializeError,
+  isInvalidationPush,
+  type InvalidationPush,
+  type Request,
+  type Response,
+} from './messages.js';
 
 const messagesDebug = Debug(`${DEBUG_PREFIX}-messages`);
 
@@ -26,23 +34,41 @@ type ProcessLike = {
 type DistributiveOmit<T, K extends keyof never> = T extends unknown ? Omit<T, K> : never;
 type RequestPayload = DistributiveOmit<Request, 'id' | 'namespace' | 'source'>;
 
+type InvalidationHandler = (msg: InvalidationPush) => void;
+
 interface IpcClient {
   sendToPrimary: <T = unknown>(opts: SendOptions, payload: RequestPayload) => Promise<T>;
   sendToPrimaryWithMeta: <T = unknown>(
     opts: SendOptions,
     payload: RequestPayload,
   ) => Promise<{ value: T; version: number }>;
+  subscribeInvalidations: (namespace: string, handler: InvalidationHandler) => () => void;
 }
 
 export function createIpcClient(proc: ProcessLike): IpcClient {
   const callbacks = new Map<string, (response: Response) => void>();
+  const subscribers = new Map<string, Set<InvalidationHandler>>();
 
   proc.on('message', (raw: unknown) => {
-    if (!isOurResponse(raw)) return;
-    const cb = callbacks.get(raw.id);
-    if (!cb) return;
-    callbacks.delete(raw.id);
-    cb(raw);
+    if (isOurResponse(raw)) {
+      const cb = callbacks.get(raw.id);
+      if (!cb) return;
+      callbacks.delete(raw.id);
+      cb(raw);
+      return;
+    }
+    if (isInvalidationPush(raw)) {
+      const set = subscribers.get(raw.namespace);
+      if (!set) return;
+      for (const handler of set) {
+        try {
+          handler(raw);
+        } catch (err) {
+          messagesDebug('invalidation handler threw: %o', err);
+        }
+      }
+      return;
+    }
   });
 
   function send<T>(opts: SendOptions, payload: RequestPayload): Promise<{ value: T; version: number }> {
@@ -90,6 +116,20 @@ export function createIpcClient(proc: ProcessLike): IpcClient {
       return r.value;
     },
     sendToPrimaryWithMeta: <T>(opts: SendOptions, payload: RequestPayload) => send<T>(opts, payload),
+    subscribeInvalidations(namespace: string, handler: InvalidationHandler): () => void {
+      let set = subscribers.get(namespace);
+      if (!set) {
+        set = new Set();
+        subscribers.set(namespace, set);
+      }
+      set.add(handler);
+      return () => {
+        const s = subscribers.get(namespace);
+        if (!s) return;
+        s.delete(handler);
+        if (s.size === 0) subscribers.delete(namespace);
+      };
+    },
   };
 }
 

@@ -1,3 +1,30 @@
+# 2.1.0 / 2026-05-03
+
+## Features
+
+- **Local L1 cache** -- new `localL1` option adds a per-worker LRU cache in front of the primary-owned shared cache. Off by default. Requires `experimental: true` in v2.1 as an explicit opt-in acknowledgement of the eventual-consistency model.
+
+  ```ts
+  new LRUCacheClustered({
+    namespace: 'users',
+    max: 50_000,
+    ttl: 60_000,
+    localL1: { enabled: true, experimental: true, ttl: 2_000 },
+  });
+  ```
+
+- **Per-call bypass options** -- `get`, `has`, `peek`, `mGet`, `fetch`, and `memoize` accept `{ bypassL1: true }` to skip the local cache on a single call. `set` and `mSet` accept `{ updateL1: false }` to suppress the local write.
+
+- **New methods**:
+  - `clearLocal()` -- flush this worker's L1 for the namespace without touching the primary.
+  - `invalidateLocal(key)` -- drop a single key from this worker's L1.
+  - `localStats()` -- returns `{ enabled, hits, misses, sets, invalidations, evictions, staleHits, size, ipcAvoided }`.
+  - `withoutLocal()` -- returns a bypass view that routes all reads through the primary; the original instance is unaffected.
+
+- **New events**: `l1:hit`, `l1:miss`, `l1:set`, `l1:invalidate`, `l1:evict`. Each carries `{ namespace, key }`.
+
+- **Wire format** -- IPC responses now carry an optional `version` field; push (invalidation broadcast) messages were added. Backward compatible: a v2.0 worker talking to a v2.1 primary ignores the unknown field; a v2.1 worker talking to a v2.0 primary simply receives no invalidation broadcasts and relies on TTL expiry.
+
 # 2.0.0 / 2026-04-28
 
 ## Breaking changes — TypeScript rewrite

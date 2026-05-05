@@ -107,6 +107,23 @@ Runnable clustered server examples &mdash; see [`examples/README.md`](./examples
 - [`clustered-compressed-documents-server.ts`](./examples/clustered-compressed-documents-server.ts) &mdash; compressed document caching via `wrap()`
 - [`clustered-multilayer-redis-server.ts`](./examples/clustered-multilayer-redis-server.ts) &mdash; clustered LRU as L1 in front of Redis as L2, with cluster-wide single-flight on cold keys
 
+## Local L1 mode
+
+Add a per-worker LRU cache in front of the primary-owned shared cache to skip IPC for hot reads.
+
+```ts
+const products = new LRUCacheClustered<string, Product>({
+  namespace: 'products',
+  max: 25_000,
+  ttl: 60_000,
+  localL1: { enabled: true, experimental: true, ttl: 2_000 },
+});
+```
+
+> L1 improves repeated read latency by avoiding IPC, but it can briefly serve stale data. Keep L1 TTL short and bypass L1 for correctness-sensitive reads.
+
+In v2.1, set `experimental: true` to opt in. See [`docs/l1.md`](docs/l1.md) for the consistency model, bypass options, stats, events, and failure modes.
+
 ## How it works
 
 `new LRUCacheClustered(...)` branches at construction:

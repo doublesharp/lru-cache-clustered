@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { LocalL1Cache, encodeL1Key } from '../src/l1.ts';
+import { LRUCacheForClustersAsPromised } from '../src/index.ts';
 
 void test('encodeL1Key handles primitives and objects', () => {
   assert.equal(encodeL1Key('a'), 's:a');
@@ -59,4 +60,20 @@ void test('LocalL1Cache TTL expires entries', async () => {
   assert.equal(l1.get('s:a'), 'v');
   await new Promise((r) => setTimeout(r, 80));
   assert.equal(l1.get('s:a'), undefined);
+});
+
+void test('worker-mode L1 reacts to invalidateLocal (proxy for the broadcast handler effect)', async () => {
+  // We can't easily mock cluster.isWorker in primary mode; the cross-worker
+  // behaviour is exercised in cluster tests (Task 13). This unit test just
+  // verifies that invalidateLocal performs the expected L1 mutation.
+  const c = new LRUCacheForClustersAsPromised<string, number>({
+    namespace: 'l1-sub',
+    max: 10,
+    localL1: { enabled: true, ttl: 1000 },
+  });
+  await c.set('a', 1);
+  await c.get('a'); // populate
+  assert.equal(c.localStats()?.size, 1);
+  c.invalidateLocal('a');
+  assert.equal(c.localStats()?.size, 0);
 });

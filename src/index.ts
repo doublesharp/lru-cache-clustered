@@ -141,6 +141,7 @@ export class LRUCacheForClustersAsPromised<K extends {} = string, V extends {} =
   readonly #l1Methods: { get: boolean; has: boolean; fetch: boolean; memoize: boolean };
   // eslint-disable-next-line no-unused-private-class-members
   readonly #l1CacheUndefined: boolean;
+  #unsubscribeL1?: () => void;
 
   constructor(options: LRUCacheClusterOptions & InternalOptions = {}) {
     this.namespace = options.namespace ?? 'default';
@@ -181,7 +182,10 @@ export class LRUCacheForClustersAsPromised<K extends {} = string, V extends {} =
         'reject',
       ).then(
         (r) => {
-          if (this.#l1) this.#l1.advanceLatestSeen(r.value.version);
+          if (this.#l1) {
+            this.#l1.advanceLatestSeen(r.value.version);
+            this.#installL1Subscription();
+          }
         },
         () => undefined,
       );
@@ -203,7 +207,10 @@ export class LRUCacheForClustersAsPromised<K extends {} = string, V extends {} =
         { op: 'init', options: instance.#lruOptions },
         'reject',
       );
-      if (instance.#l1) instance.#l1.advanceLatestSeen(r.value.version);
+      if (instance.#l1) {
+        instance.#l1.advanceLatestSeen(r.value.version);
+        instance.#installL1Subscription();
+      }
     }
     return instance;
   }
@@ -316,7 +323,7 @@ export class LRUCacheForClustersAsPromised<K extends {} = string, V extends {} =
     if (useL1) {
       for (const k of keys) {
         const enc = encodeL1KeyOrUndefined(k);
-        const hit = enc !== undefined ? (this.#l1.get(enc)) : undefined;
+        const hit = enc !== undefined ? this.#l1.get(enc) : undefined;
         if (hit !== undefined) out.set(k, hit);
         else remainingKeys.push(k);
       }
@@ -453,8 +460,11 @@ export class LRUCacheForClustersAsPromised<K extends {} = string, V extends {} =
     if (this.#l1) this.#l1.advanceLatestSeen(r.version);
     return r.value;
   }
-  destroy() {
+  async destroy(): Promise<boolean> {
     this.#inFlight.clear();
+    this.#unsubscribeL1?.();
+    this.#unsubscribeL1 = undefined;
+    this.#l1?.destroy();
     return this.#dispatch<boolean>({ op: 'destroy' });
   }
   healthCheck() {
@@ -563,6 +573,23 @@ export class LRUCacheForClustersAsPromised<K extends {} = string, V extends {} =
       // slot. Only clear if this slot is still current.
       if (this.#inFlight.get(key) === slot) this.#inFlight.delete(key);
     }
+  }
+
+  #installL1Subscription(): void {
+    if (!this.#l1 || cluster.isPrimary) return;
+    this.#unsubscribeL1 = getDefaultClient().subscribeInvalidations(this.namespace, (msg) => {
+      this.#l1!.advanceLatestSeen(msg.version);
+      if (msg.push === 'l1:invalidate') {
+        try {
+          // eslint-disable-next-line @typescript-eslint/no-empty-object-type
+          this.#l1!.delete(encodeL1Key(msg.key as {}));
+        } catch {
+          // Symbol or unencodable key: no-op
+        }
+      } else {
+        this.#l1!.clear();
+      }
+    });
   }
 
   #dispatch<T>(payload: ExecPayload): Promise<T> {

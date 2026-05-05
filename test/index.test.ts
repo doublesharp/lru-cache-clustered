@@ -641,3 +641,49 @@ void test('getRemainingTTL normalizes null to Infinity (JSON IPC compatibility)'
   const ttl = await cache.getRemainingTTL('k');
   assert.equal(ttl, Infinity);
 });
+
+void test('constructor accepts localL1 option (boolean shorthand)', () => {
+  const c = new LRUCacheForClustersAsPromised({ namespace: 'l1-bool', max: 10, localL1: true });
+  const stats = c.localStats();
+  assert.notEqual(stats, undefined);
+  if (stats) {
+    assert.equal(stats.enabled, true);
+    assert.equal(stats.size, 0);
+  }
+});
+
+void test('constructor accepts localL1 option (object form)', () => {
+  const c = new LRUCacheForClustersAsPromised({
+    namespace: 'l1-obj',
+    max: 10,
+    ttl: 60_000,
+    localL1: { enabled: true, max: 100, ttl: 1000 },
+  });
+  assert.notEqual(c.localStats(), undefined);
+});
+
+void test('localL1 disabled by default returns undefined from localStats', () => {
+  const c = new LRUCacheForClustersAsPromised({ namespace: 'l1-default', max: 10 });
+  assert.equal(c.localStats(), undefined);
+});
+
+void test('localL1 ttl clamps to primary ttl when greater', () => {
+  // Construction succeeds; behaviour is exercised in later tasks.
+  const c = new LRUCacheForClustersAsPromised({
+    namespace: 'l1-clamp',
+    max: 10,
+    ttl: 1000,
+    localL1: { enabled: true, ttl: 5000 },
+  });
+  assert.notEqual(c.localStats(), undefined);
+});
+
+void test('clearLocal is a no-op when L1 disabled', () => {
+  const c = new LRUCacheForClustersAsPromised({ namespace: 'l1-noop' });
+  c.clearLocal(); // does not throw
+});
+
+void test('invalidateLocal is a no-op when L1 disabled', () => {
+  const c = new LRUCacheForClustersAsPromised({ namespace: 'l1-noop-2' });
+  c.invalidateLocal('nope'); // does not throw
+});

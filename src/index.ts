@@ -3,6 +3,7 @@ import { LRUCache } from 'lru-cache';
 import { caches, dispatchOp, getOrCreateCache, installClusterListener, type ExecPayload } from './primary.js';
 import { getDefaultClient } from './worker.js';
 import { type SerializableLruOptions, type Stats } from './messages.js';
+import { LocalL1Cache, encodeL1Key, type L1Stats } from './l1.js';
 
 if (cluster.isPrimary) installClusterListener();
 
@@ -27,14 +28,79 @@ export interface FetchOptions extends WriteOptions {
   forceRefresh?: boolean;
 }
 
+export type LocalL1Options = {
+  enabled?: boolean;
+  max?: number;
+  maxSize?: number;
+  ttl?: number;
+  updateAgeOnGet?: boolean;
+  allowStale?: boolean;
+  cacheUndefined?: boolean;
+  invalidation?: 'broadcast' | 'ttl-only';
+  methods?: {
+    get?: boolean;
+    has?: boolean;
+    fetch?: boolean;
+    memoize?: boolean;
+  };
+  experimental?: boolean;
+};
+
 export interface LRUCacheClusterOptions extends SerializableLruOptions {
   namespace?: string;
   timeout?: number;
   failsafe?: 'resolve' | 'reject';
+  localL1?: boolean | LocalL1Options;
 }
 
 interface InternalOptions {
   noInit?: boolean;
+}
+
+const DEFAULT_L1_TTL_MS = 5_000;
+const DEFAULT_L1_MAX = 1_000;
+
+type NormalizedL1 = {
+  max: number;
+  maxSize?: number;
+  ttl: number;
+  updateAgeOnGet: boolean;
+  allowStale: boolean;
+  cacheUndefined: boolean;
+  invalidation: 'broadcast' | 'ttl-only';
+  methods: { get: boolean; has: boolean; fetch: boolean; memoize: boolean };
+};
+
+function normalizeL1(
+  raw: boolean | LocalL1Options | undefined,
+  primary: SerializableLruOptions,
+): NormalizedL1 | undefined {
+  if (raw === undefined || raw === false) return undefined;
+  const opts: LocalL1Options = raw === true ? { enabled: true } : raw;
+  if (opts.enabled === false) return undefined;
+
+  // Default L1 ttl: min(primaryTtl * 0.1, 5000), with 100ms floor.
+  // If primary ttl is unset, default to 5000.
+  // Hard cap: L1 ttl cannot exceed primary ttl.
+  const requestedTtl = opts.ttl ?? Math.min((primary.ttl ?? Infinity) * 0.1, DEFAULT_L1_TTL_MS);
+  const cappedTtl = primary.ttl !== undefined ? Math.min(requestedTtl, primary.ttl) : requestedTtl;
+  const ttl = Math.max(100, Math.floor(cappedTtl));
+
+  return {
+    max: opts.max ?? DEFAULT_L1_MAX,
+    maxSize: opts.maxSize,
+    ttl,
+    updateAgeOnGet: opts.updateAgeOnGet ?? true,
+    allowStale: opts.allowStale ?? false,
+    cacheUndefined: false, // forced false for v1; spec section 6.2
+    invalidation: opts.invalidation ?? 'broadcast',
+    methods: {
+      get: opts.methods?.get ?? true,
+      has: opts.methods?.has ?? true,
+      fetch: opts.methods?.fetch ?? true,
+      memoize: opts.methods?.memoize ?? true,
+    },
+  };
 }
 
 // K and V are constrained to non-nullish to mirror lru-cache@11's own signature
@@ -54,17 +120,36 @@ export class LRUCacheForClustersAsPromised<K extends {} = string, V extends {} =
   // same instance piggyback locally before the primary-side single-flight lock
   // engages across instances and workers.
   readonly #inFlight = new Map<K, { promise: Promise<V> }>();
+  readonly #l1?: LocalL1Cache<V & NonNullish>;
+  // eslint-disable-next-line no-unused-private-class-members
+  readonly #l1Methods: { get: boolean; has: boolean; fetch: boolean; memoize: boolean };
+  // eslint-disable-next-line no-unused-private-class-members
+  readonly #l1CacheUndefined: boolean;
 
   constructor(options: LRUCacheClusterOptions & InternalOptions = {}) {
     this.namespace = options.namespace ?? 'default';
     this.timeout = options.timeout ?? 100;
     this.failsafe = options.failsafe === 'reject' ? 'reject' : 'resolve';
-    const { namespace: _n, timeout: _t, failsafe: _f, noInit: _ni, ...lruOpts } = options;
+    const { namespace: _n, timeout: _t, failsafe: _f, noInit: _ni, localL1: _l1, ...lruOpts } = options;
     void _n;
     void _t;
     void _f;
     void _ni;
+    void _l1;
     this.#lruOptions = lruOpts;
+
+    const l1Config = normalizeL1(options.localL1, lruOpts);
+    this.#l1Methods = l1Config?.methods ?? { get: false, has: false, fetch: false, memoize: false };
+    this.#l1CacheUndefined = l1Config?.cacheUndefined ?? false;
+    if (l1Config) {
+      this.#l1 = new LocalL1Cache<V & NonNullish>({
+        max: l1Config.max,
+        maxSize: l1Config.maxSize,
+        ttl: l1Config.ttl,
+        updateAgeOnGet: l1Config.updateAgeOnGet,
+        allowStale: l1Config.allowStale,
+      });
+    }
 
     if (cluster.isPrimary) {
       getOrCreateCache(this.namespace, this.#lruOptions);
@@ -251,6 +336,23 @@ export class LRUCacheForClustersAsPromised<K extends {} = string, V extends {} =
   }
   stats() {
     return this.#dispatch<Stats>({ op: 'stats' });
+  }
+
+  localStats(): L1Stats | undefined {
+    return this.#l1?.stats();
+  }
+
+  clearLocal(): void {
+    this.#l1?.clear();
+  }
+
+  invalidateLocal(key: K): void {
+    if (!this.#l1) return;
+    try {
+      this.#l1.delete(encodeL1Key(key));
+    } catch {
+      // bad key encoding: nothing to invalidate
+    }
   }
 
   // Materializes the full entries array up front, then yields — simpler than

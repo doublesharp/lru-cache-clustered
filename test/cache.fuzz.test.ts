@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { caches, handleRequest, stats } from '../src/primary.ts';
 import { SOURCE, type Request } from '../src/messages.ts';
+import { LRUCacheForClustersAsPromised } from '../src/index.ts';
 
 // Each iteration generates a fresh namespace; without clearing the full
 // registry the caches/stats Maps accumulate ~NUM_RUNS entries per test (and
@@ -200,5 +201,43 @@ void test('property: max(newCap) shrinks size to <= newCap', () => {
     dispatch(ns, 'max', { value: newCap });
     const size = (dispatch(ns, 'size') as { value: number }).value;
     assert.ok(size <= newCap, `after max=${newCap}, size=${size}`);
+  }
+});
+
+void test('fuzz: random ops with L1 enabled converge to bypass-L1 reads', async () => {
+  const c = new LRUCacheForClustersAsPromised<string, number>({
+    namespace: 'fuzz-l1',
+    max: 100,
+    localL1: { enabled: true, experimental: true, ttl: 200 },
+  });
+  const keys = ['a', 'b', 'c', 'd', 'e'];
+  const expected = new Map<string, number | undefined>();
+  for (const k of keys) expected.set(k, undefined);
+
+  // 500 random ops mixing reads, writes, deletes
+  for (let i = 0; i < 500; i++) {
+    const k = keys[Math.floor(Math.random() * keys.length)] as string;
+    const op = Math.random();
+    if (op < 0.5) {
+      const v = i;
+      await c.set(k, v);
+      expected.set(k, v);
+    } else if (op < 0.8) {
+      await c.delete(k);
+      expected.set(k, undefined);
+    } else {
+      // Read - L1-aware path should agree with the expected value.
+      const got = await c.get(k);
+      assert.equal(got, expected.get(k));
+    }
+  }
+  // Final convergence check: every key, both via L1-aware get and bypass,
+  // matches what we expect.
+  for (const k of keys) {
+    const viaL1 = await c.get(k);
+    const viaBypass = await c.get(k, { bypassL1: true });
+    assert.equal(viaL1, expected.get(k), `key ${k}: L1 read mismatch`);
+    assert.equal(viaBypass, expected.get(k), `key ${k}: bypass read mismatch`);
+    assert.equal(viaL1, viaBypass, `key ${k}: L1 and bypass disagree`);
   }
 });

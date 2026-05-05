@@ -1,10 +1,10 @@
 import cluster from 'node:cluster';
 import { setTimeout } from 'node:timers';
-import { LRUCacheForClustersAsPromised } from '../../src/index.ts';
+import { LRUCacheClustered } from '../../src/index.ts';
 
 if (!cluster.isWorker) throw new Error('worker-fetch-child loaded outside a worker');
 
-const cache = await LRUCacheForClustersAsPromised.getInstance<string, string>({
+const cache = await LRUCacheClustered.getInstance<string, string>({
   namespace: 'integration-fetch',
   max: 10,
 });

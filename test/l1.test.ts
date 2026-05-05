@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { LocalL1Cache, encodeL1Key } from '../src/l1.ts';
-import { LRUCacheForClustersAsPromised } from '../src/index.ts';
+import { LRUCacheClustered } from '../src/index.ts';
 
 void test('encodeL1Key handles primitives and objects', () => {
   assert.equal(encodeL1Key('a'), 's:a');
@@ -66,7 +66,7 @@ void test('worker-mode L1 reacts to invalidateLocal (proxy for the broadcast han
   // We can't easily mock cluster.isWorker in primary mode; the cross-worker
   // behaviour is exercised in cluster tests (Task 13). This unit test just
   // verifies that invalidateLocal performs the expected L1 mutation.
-  const c = new LRUCacheForClustersAsPromised<string, number>({
+  const c = new LRUCacheClustered<string, number>({
     namespace: 'l1-sub',
     max: 10,
     localL1: { enabled: true, experimental: true, ttl: 1000 },
@@ -79,7 +79,7 @@ void test('worker-mode L1 reacts to invalidateLocal (proxy for the broadcast han
 });
 
 void test('fetch leader populates own L1 after fetcher success', async () => {
-  const c = new LRUCacheForClustersAsPromised<string, number>({
+  const c = new LRUCacheClustered<string, number>({
     namespace: 'l1-fetch',
     max: 10,
     localL1: { enabled: true, experimental: true, ttl: 1000 },
@@ -102,7 +102,7 @@ void test('fetch leader populates own L1 after fetcher success', async () => {
 });
 
 void test('fetch with bypassL1 forces a primary read but still single-flights', async () => {
-  const c = new LRUCacheForClustersAsPromised<string, number>({
+  const c = new LRUCacheClustered<string, number>({
     namespace: 'l1-fetch-bypass',
     max: 10,
     localL1: { enabled: true, experimental: true, ttl: 1000 },

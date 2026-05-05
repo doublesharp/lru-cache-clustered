@@ -1,12 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { LRUCacheForClustersAsPromised } from '../src/index.ts';
+import { LRUCacheClustered } from '../src/index.ts';
 import { memoize } from '../src/memoize.ts';
 import { caches } from '../src/primary.ts';
 
 void test('memoize returns cached value on subsequent calls', async () => {
   caches.clear();
-  const cache = new LRUCacheForClustersAsPromised<string, number>({ namespace: 'memo-1', max: 10 });
+  const cache = new LRUCacheClustered<string, number>({ namespace: 'memo-1', max: 10 });
   let calls = 0;
   const fn = (n: number) => {
     calls += 1;
@@ -22,7 +22,7 @@ void test('memoize returns cached value on subsequent calls', async () => {
 
 void test('memoize dedups concurrent calls for the same key', async () => {
   caches.clear();
-  const cache = new LRUCacheForClustersAsPromised<string, number>({ namespace: 'memo-2', max: 10 });
+  const cache = new LRUCacheClustered<string, number>({ namespace: 'memo-2', max: 10 });
   let calls = 0;
   const fn = async (n: number) => {
     calls += 1;
@@ -51,7 +51,7 @@ void test('memoize delegates derived keys and options to cache.fetch', async () 
       seenOpts = opts;
       return fetcher(key);
     },
-  } as unknown as LRUCacheForClustersAsPromised<string, number>;
+  } as unknown as LRUCacheClustered<string, number>;
 
   const memo = memoize(
     cache,
@@ -72,7 +72,7 @@ void test('memoize delegates derived keys and options to cache.fetch', async () 
 
 void test('memoize calls fn independently for different keys', async () => {
   caches.clear();
-  const cache = new LRUCacheForClustersAsPromised<string, number>({ namespace: 'memo-3', max: 10 });
+  const cache = new LRUCacheClustered<string, number>({ namespace: 'memo-3', max: 10 });
   let calls = 0;
   const fn = (n: number) => {
     calls += 1;
@@ -88,7 +88,7 @@ void test('memoize calls fn independently for different keys', async () => {
 
 void test('memoize honors ttl on the underlying set', async () => {
   caches.clear();
-  const cache = new LRUCacheForClustersAsPromised<string, number>({ namespace: 'memo-4', max: 10 });
+  const cache = new LRUCacheClustered<string, number>({ namespace: 'memo-4', max: 10 });
   let calls = 0;
   const fn = (n: number) => {
     calls += 1;
@@ -111,7 +111,7 @@ void test('memoize honors ttl on the underlying set', async () => {
 
 void test('memoize supports size-bounded caches via size option', async () => {
   caches.clear();
-  const cache = new LRUCacheForClustersAsPromised<string, number>({ namespace: 'memo-size', maxSize: 10 });
+  const cache = new LRUCacheClustered<string, number>({ namespace: 'memo-size', maxSize: 10 });
   let calls = 0;
   const memo = memoize(
     cache,
@@ -130,7 +130,7 @@ void test('memoize supports size-bounded caches via size option', async () => {
 
 void test('memoize propagates errors and clears in-flight slot', async () => {
   caches.clear();
-  const cache = new LRUCacheForClustersAsPromised<string, string>({ namespace: 'memo-5', max: 10 });
+  const cache = new LRUCacheClustered<string, string>({ namespace: 'memo-5', max: 10 });
   let calls = 0;
   let shouldThrow = true;
   const fn = async (label: string) => {
@@ -157,7 +157,7 @@ void test('memoize propagates errors and clears in-flight slot', async () => {
 
 void test('memoize keyFn receives the original args', async () => {
   caches.clear();
-  const cache = new LRUCacheForClustersAsPromised<string, string>({ namespace: 'memo-6', max: 10 });
+  const cache = new LRUCacheClustered<string, string>({ namespace: 'memo-6', max: 10 });
   const seen: Array<[number, string]> = [];
   const fn = (a: number, b: string) => `${a}-${b}`;
   const memo = memoize(cache, fn, (a: number, b: string) => {
@@ -179,8 +179,8 @@ void test('memoize keyFn receives the original args', async () => {
 
 void test('memoize: separate cache instances have independent dedup tables', async () => {
   caches.clear();
-  const cacheA = new LRUCacheForClustersAsPromised<string, number>({ namespace: 'memo-7a', max: 10 });
-  const cacheB = new LRUCacheForClustersAsPromised<string, number>({ namespace: 'memo-7b', max: 10 });
+  const cacheA = new LRUCacheClustered<string, number>({ namespace: 'memo-7a', max: 10 });
+  const cacheB = new LRUCacheClustered<string, number>({ namespace: 'memo-7b', max: 10 });
 
   let callsA = 0;
   let callsB = 0;
@@ -211,7 +211,7 @@ void test('memoize: separate cache instances have independent dedup tables', asy
 });
 
 void test('memoize honors L1 (second call hits L1 in primary mode)', async () => {
-  const cache = new LRUCacheForClustersAsPromised<string, number>({
+  const cache = new LRUCacheClustered<string, number>({
     namespace: 'memo-l1',
     max: 10,
     localL1: { enabled: true, experimental: true, ttl: 1000 },

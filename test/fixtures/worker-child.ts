@@ -3,29 +3,29 @@
 // via process.send (a non-LRU message — the cache uses its own IPC channel).
 import cluster from 'node:cluster';
 import { setTimeout } from 'node:timers';
-import { LRUCacheForClustersAsPromised } from '../../src/index.ts';
+import { LRUCacheClustered } from '../../src/index.ts';
 
 if (!cluster.isWorker) throw new Error('worker-child loaded outside a worker');
 
 async function run() {
   // Construct without noInit: exercises the worker-side init dispatch path.
-  new LRUCacheForClustersAsPromised({ namespace: 'integration-init', max: 5 });
+  new LRUCacheClustered({ namespace: 'integration-init', max: 5 });
 
   // Worker-only error paths.
   let getAllCachesThrew = false;
   try {
-    LRUCacheForClustersAsPromised.getAllCaches();
+    LRUCacheClustered.getAllCaches();
   } catch {
     getAllCachesThrew = true;
   }
   let getCacheThrew = false;
   try {
-    new LRUCacheForClustersAsPromised({ namespace: 'integration-getcache', max: 5, noInit: true }).getCache();
+    new LRUCacheClustered({ namespace: 'integration-getcache', max: 5, noInit: true }).getCache();
   } catch {
     getCacheThrew = true;
   }
 
-  const cache = await LRUCacheForClustersAsPromised.getInstance<string, string>({
+  const cache = await LRUCacheClustered.getInstance<string, string>({
     namespace: 'integration',
     max: 10,
   });
@@ -42,7 +42,7 @@ async function run() {
 
   const counter = await cache.incr('hits', 3);
 
-  const ephemeral = await LRUCacheForClustersAsPromised.getInstance<string, string>({
+  const ephemeral = await LRUCacheClustered.getInstance<string, string>({
     namespace: 'integration-destroy',
     max: 5,
     ttl: 1_000,

@@ -1,13 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { LRUCacheForClustersAsPromised } from '../src/index.ts';
+import { LRUCacheClustered } from '../src/index.ts';
 
 void test('invalidation arriving before response: stale entry rejected by version check', async () => {
   // In primary mode, dispatchAndBroadcast is sync, so we can't naturally race.
   // Simulate: read produces value+version V1, then we manually advance latestSeen
   // *before* the L1.set call would simulate landing. Easiest model: directly
   // drive the public API and confirm convergence.
-  const c = new LRUCacheForClustersAsPromised<string, number>({
+  const c = new LRUCacheClustered<string, number>({
     namespace: 'race-1',
     max: 10,
     localL1: { enabled: true, experimental: true, ttl: 1000 },
@@ -25,7 +25,7 @@ void test('invalidation arriving before response: stale entry rejected by versio
 });
 
 void test('rapid set/delete/set on same key: final state is the last write', async () => {
-  const c = new LRUCacheForClustersAsPromised<string, number>({
+  const c = new LRUCacheClustered<string, number>({
     namespace: 'race-2',
     max: 10,
     localL1: { enabled: true, experimental: true, ttl: 1000 },
@@ -40,7 +40,7 @@ void test('rapid set/delete/set on same key: final state is the last write', asy
 });
 
 void test('clear during fetch: in-flight fetcher completes, value either stored or aborted (never stale)', async () => {
-  const c = new LRUCacheForClustersAsPromised<string, number>({
+  const c = new LRUCacheClustered<string, number>({
     namespace: 'race-3',
     max: 10,
     localL1: { enabled: true, experimental: true, ttl: 1000 },
@@ -75,7 +75,7 @@ void test('clear during fetch: in-flight fetcher completes, value either stored 
 });
 
 void test('many concurrent sets to same key converge with no zombie L1 entries', async () => {
-  const c = new LRUCacheForClustersAsPromised<string, number>({
+  const c = new LRUCacheClustered<string, number>({
     namespace: 'race-4',
     max: 10,
     localL1: { enabled: true, experimental: true, ttl: 1000 },
@@ -93,7 +93,7 @@ void test('many concurrent sets to same key converge with no zombie L1 entries',
 });
 
 void test('concurrent fetch from same instance dedups via inFlight slot', async () => {
-  const c = new LRUCacheForClustersAsPromised<string, number>({
+  const c = new LRUCacheClustered<string, number>({
     namespace: 'race-5',
     max: 10,
     localL1: { enabled: true, experimental: true, ttl: 1000 },

@@ -5,7 +5,7 @@ import type { Worker } from 'node:cluster';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as setTimer, clearTimeout as clearTimer } from 'node:timers';
-import { LRUCacheForClustersAsPromised } from '../src/index.ts';
+import { LRUCacheClustered } from '../src/index.ts';
 import { caches, stats } from '../src/primary.ts';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -113,7 +113,7 @@ async function forkHarnessWorker(): Promise<HarnessWorker> {
 
 void test('cluster.fork roundtrip: worker can use IPC cache', { timeout: 15_000 }, async () => {
   // Pre-create the cache on the primary so the worker can find it.
-  new LRUCacheForClustersAsPromised({ namespace: 'integration', max: 10 });
+  new LRUCacheClustered({ namespace: 'integration', max: 10 });
 
   cluster.setupPrimary({
     exec: path.join(here, 'fixtures', 'worker-child.ts'),
@@ -238,7 +238,7 @@ void test(
     stats.clear();
 
     const namespace = 'integration-shared';
-    const primaryCache = new LRUCacheForClustersAsPromised<string, number | string>({ namespace, max: 1000 });
+    const primaryCache = new LRUCacheClustered<string, number | string>({ namespace, max: 1000 });
 
     setupHarnessPrimary();
     const workers = await Promise.all([forkHarnessWorker(), forkHarnessWorker()]);
@@ -285,7 +285,7 @@ void test(
     stats.clear();
 
     const namespace = 'integration-conflict';
-    new LRUCacheForClustersAsPromised({ namespace, max: 1 });
+    new LRUCacheClustered({ namespace, max: 1 });
 
     setupHarnessPrimary();
     const worker = await forkHarnessWorker();
@@ -312,7 +312,7 @@ void test('cluster: worker timeouts honor failsafe modes over real IPC', { timeo
   stats.clear();
 
   const namespace = 'integration-timeout';
-  const primaryCache = new LRUCacheForClustersAsPromised<string, string>({ namespace, max: 10 });
+  const primaryCache = new LRUCacheClustered<string, string>({ namespace, max: 10 });
   const inner = primaryCache.getCache();
   assert.ok(inner);
 
@@ -355,7 +355,7 @@ void test(
     stats.clear();
 
     const namespace = 'integration-mget-timeout';
-    const primaryCache = new LRUCacheForClustersAsPromised<string, string>({ namespace, max: 10 });
+    const primaryCache = new LRUCacheClustered<string, string>({ namespace, max: 10 });
     const inner = primaryCache.getCache();
     assert.ok(inner);
 
@@ -398,7 +398,7 @@ void test(
     stats.clear();
 
     const namespace = 'integration-rttl-timeout';
-    const primaryCache = new LRUCacheForClustersAsPromised<string, string>({ namespace, max: 10 });
+    const primaryCache = new LRUCacheClustered<string, string>({ namespace, max: 10 });
     const inner = primaryCache.getCache();
     assert.ok(inner);
 
@@ -443,7 +443,7 @@ void test('cluster: wrapped caches round-trip encoded Buffers across workers', {
   stats.clear();
 
   const namespace = 'integration-codec';
-  const primaryCache = new LRUCacheForClustersAsPromised<string, Buffer>({ namespace, max: 10 });
+  const primaryCache = new LRUCacheClustered<string, Buffer>({ namespace, max: 10 });
 
   setupHarnessPrimary();
   const workers = await Promise.all([forkHarnessWorker(), forkHarnessWorker()]);

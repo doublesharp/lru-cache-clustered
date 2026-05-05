@@ -1,7 +1,7 @@
 import cluster from 'node:cluster';
 import { gzipSync, gunzipSync } from 'node:zlib';
 import { setTimeout } from 'node:timers';
-import { LRUCacheForClustersAsPromised, wrap } from '../../src/index.ts';
+import { LRUCacheClustered, wrap } from '../../src/index.ts';
 
 if (!cluster.isWorker) throw new Error('worker-harness loaded outside a worker');
 
@@ -50,12 +50,12 @@ async function handleCommand(cmd: string, args: unknown): Promise<unknown> {
   switch (cmd) {
     case 'set': {
       const { options, key, value, ttl } = args as {
-        options: ConstructorParameters<typeof LRUCacheForClustersAsPromised>[0];
+        options: ConstructorParameters<typeof LRUCacheClustered>[0];
         key: string;
         value: unknown;
         ttl?: number;
       };
-      const cache = await LRUCacheForClustersAsPromised.getInstance<string, {}>(options);
+      const cache = await LRUCacheClustered.getInstance<string, {}>(options);
       // value arrives over IPC as `unknown`; the runtime guard rejects null
       // and undefined, so cast to {} to satisfy the public generic constraint.
       return cache.set(key, value as {}, ttl !== undefined ? { ttl } : undefined);
@@ -63,21 +63,21 @@ async function handleCommand(cmd: string, args: unknown): Promise<unknown> {
 
     case 'get': {
       const { options, key } = args as {
-        options: ConstructorParameters<typeof LRUCacheForClustersAsPromised>[0];
+        options: ConstructorParameters<typeof LRUCacheClustered>[0];
         key: string;
       };
-      const cache = await LRUCacheForClustersAsPromised.getInstance<string, {}>(options);
+      const cache = await LRUCacheClustered.getInstance<string, {}>(options);
       return cache.get(key);
     }
 
     case 'incrMany': {
       const { options, key, count, amount } = args as {
-        options: ConstructorParameters<typeof LRUCacheForClustersAsPromised>[0];
+        options: ConstructorParameters<typeof LRUCacheClustered>[0];
         key: string;
         count: number;
         amount?: number;
       };
-      const cache = await LRUCacheForClustersAsPromised.getInstance<string, number>(options);
+      const cache = await LRUCacheClustered.getInstance<string, number>(options);
       let last = 0;
       for (let i = 0; i < count; i++) {
         last = await cache.incr(key, amount);
@@ -87,31 +87,31 @@ async function handleCommand(cmd: string, args: unknown): Promise<unknown> {
 
     case 'wrappedSet': {
       const { options, key, value, ttl } = args as {
-        options: ConstructorParameters<typeof LRUCacheForClustersAsPromised>[0];
+        options: ConstructorParameters<typeof LRUCacheClustered>[0];
         key: string;
         value: unknown;
         ttl?: number;
       };
-      const cache = await LRUCacheForClustersAsPromised.getInstance<string, Buffer>(options);
+      const cache = await LRUCacheClustered.getInstance<string, Buffer>(options);
       const wrapped = wrap(cache, gzipJsonCodec);
       return wrapped.set(key, value as {}, ttl !== undefined ? { ttl } : undefined);
     }
 
     case 'wrappedGet': {
       const { options, key } = args as {
-        options: ConstructorParameters<typeof LRUCacheForClustersAsPromised>[0];
+        options: ConstructorParameters<typeof LRUCacheClustered>[0];
         key: string;
       };
-      const cache = await LRUCacheForClustersAsPromised.getInstance<string, Buffer>(options);
+      const cache = await LRUCacheClustered.getInstance<string, Buffer>(options);
       const wrapped = wrap(cache, gzipJsonCodec);
       return wrapped.get(key);
     }
 
     case 'probeReadyConflict': {
       const { options } = args as {
-        options: ConstructorParameters<typeof LRUCacheForClustersAsPromised>[0];
+        options: ConstructorParameters<typeof LRUCacheClustered>[0];
       };
-      const cache = new LRUCacheForClustersAsPromised(options);
+      const cache = new LRUCacheClustered(options);
       let threw = false;
       let value: unknown;
       try {
@@ -124,10 +124,10 @@ async function handleCommand(cmd: string, args: unknown): Promise<unknown> {
 
     case 'getInstanceConflict': {
       const { options } = args as {
-        options: ConstructorParameters<typeof LRUCacheForClustersAsPromised>[0];
+        options: ConstructorParameters<typeof LRUCacheClustered>[0];
       };
       try {
-        await LRUCacheForClustersAsPromised.getInstance(options);
+        await LRUCacheClustered.getInstance(options);
         return { ok: true };
       } catch (error) {
         const serialized = serializeError(error);
@@ -140,12 +140,12 @@ async function handleCommand(cmd: string, args: unknown): Promise<unknown> {
       // post-IPC view of mGet without losing the undefined/null distinction
       // a second time when this response itself crosses cluster IPC.
       const { options, presentKey, presentValue, missingKey } = args as {
-        options: ConstructorParameters<typeof LRUCacheForClustersAsPromised>[0];
+        options: ConstructorParameters<typeof LRUCacheClustered>[0];
         presentKey: string;
         presentValue: string;
         missingKey: string;
       };
-      const cache = await LRUCacheForClustersAsPromised.getInstance<string, string>(options);
+      const cache = await LRUCacheClustered.getInstance<string, string>(options);
       await cache.set(presentKey, presentValue);
       const map = await cache.mGet([presentKey, missingKey]);
       const missingValue = map.get(missingKey);
@@ -161,10 +161,10 @@ async function handleCommand(cmd: string, args: unknown): Promise<unknown> {
       // Same shape: report a JSON-safe verdict on whether the worker saw
       // Infinity for a no-TTL key (the documented contract).
       const { options, key } = args as {
-        options: ConstructorParameters<typeof LRUCacheForClustersAsPromised>[0];
+        options: ConstructorParameters<typeof LRUCacheClustered>[0];
         key: string;
       };
-      const cache = await LRUCacheForClustersAsPromised.getInstance<string, string>(options);
+      const cache = await LRUCacheClustered.getInstance<string, string>(options);
       await cache.set(key, 'v');
       const ttl = await cache.getRemainingTTL(key);
       return {
@@ -177,10 +177,10 @@ async function handleCommand(cmd: string, args: unknown): Promise<unknown> {
 
     case 'getOutcome': {
       const { options, key } = args as {
-        options: ConstructorParameters<typeof LRUCacheForClustersAsPromised>[0];
+        options: ConstructorParameters<typeof LRUCacheClustered>[0];
         key: string;
       };
-      const cache = await LRUCacheForClustersAsPromised.getInstance<string, {}>(options);
+      const cache = await LRUCacheClustered.getInstance<string, {}>(options);
       try {
         const value = await cache.get(key);
         return { status: 'resolved', value };
@@ -192,10 +192,10 @@ async function handleCommand(cmd: string, args: unknown): Promise<unknown> {
 
     case 'mGetOutcome': {
       const { options, keys } = args as {
-        options: ConstructorParameters<typeof LRUCacheForClustersAsPromised>[0];
+        options: ConstructorParameters<typeof LRUCacheClustered>[0];
         keys: string[];
       };
-      const cache = await LRUCacheForClustersAsPromised.getInstance<string, {}>(options);
+      const cache = await LRUCacheClustered.getInstance<string, {}>(options);
       try {
         const map = await cache.mGet(keys);
         return { status: 'resolved', size: map.size, isMap: map instanceof Map };
@@ -206,10 +206,10 @@ async function handleCommand(cmd: string, args: unknown): Promise<unknown> {
 
     case 'rttlOutcome': {
       const { options, key } = args as {
-        options: ConstructorParameters<typeof LRUCacheForClustersAsPromised>[0];
+        options: ConstructorParameters<typeof LRUCacheClustered>[0];
         key: string;
       };
-      const cache = await LRUCacheForClustersAsPromised.getInstance<string, {}>(options);
+      const cache = await LRUCacheClustered.getInstance<string, {}>(options);
       try {
         const value = await cache.getRemainingTTL(key);
         return {

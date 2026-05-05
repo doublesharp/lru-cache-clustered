@@ -1,11 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { LRUCacheForClustersAsPromised } from '../src/index.ts';
+import { LRUCacheClustered } from '../src/index.ts';
 import { caches } from '../src/primary.ts';
 
 void test('primary-mode set/get/delete round-trip', async () => {
   caches.clear();
-  const cache = new LRUCacheForClustersAsPromised<string, string>({ namespace: 'idx-1', max: 10 });
+  const cache = new LRUCacheClustered<string, string>({ namespace: 'idx-1', max: 10 });
   await cache.set('k', 'v');
   assert.equal(await cache.get('k'), 'v');
   assert.equal(await cache.has('k'), true);
@@ -15,7 +15,7 @@ void test('primary-mode set/get/delete round-trip', async () => {
 
 void test('primary-mode mGet/mSet/mDelete', async () => {
   caches.clear();
-  const cache = new LRUCacheForClustersAsPromised<string, number>({ namespace: 'idx-2', max: 10 });
+  const cache = new LRUCacheClustered<string, number>({ namespace: 'idx-2', max: 10 });
   await cache.mSet([
     ['a', 1],
     ['b', 2],
@@ -35,7 +35,7 @@ void test('primary-mode mGet/mSet/mDelete', async () => {
 
 void test('primary-mode incr/decr', async () => {
   caches.clear();
-  const cache = new LRUCacheForClustersAsPromised<string, number>({ namespace: 'idx-3' });
+  const cache = new LRUCacheClustered<string, number>({ namespace: 'idx-3' });
   assert.equal(await cache.incr('hits'), 1);
   assert.equal(await cache.incr('hits', 4), 5);
   assert.equal(await cache.decr('hits'), 4);
@@ -43,7 +43,7 @@ void test('primary-mode incr/decr', async () => {
 
 void test('primary-mode size, keys, values, entries, clear', async () => {
   caches.clear();
-  const cache = new LRUCacheForClustersAsPromised<string, number>({ namespace: 'idx-4', max: 10 });
+  const cache = new LRUCacheClustered<string, number>({ namespace: 'idx-4', max: 10 });
   await cache.set('a', 1);
   await cache.set('b', 2);
   assert.equal(await cache.size(), 2);
@@ -59,7 +59,7 @@ void test('primary-mode size, keys, values, entries, clear', async () => {
 
 void test('primary-mode config getters/setters', async () => {
   caches.clear();
-  const cache = new LRUCacheForClustersAsPromised<string, number>({ namespace: 'idx-5', max: 10, ttl: 1000 });
+  const cache = new LRUCacheClustered<string, number>({ namespace: 'idx-5', max: 10, ttl: 1000 });
   assert.equal(await cache.max(), 10);
   assert.equal(await cache.max(50), 50);
   assert.equal(await cache.ttl(), 1000);
@@ -70,7 +70,7 @@ void test('primary-mode config getters/setters', async () => {
 
 void test('primary-mode max setter preserves per-entry TTL metadata', async () => {
   caches.clear();
-  const cache = new LRUCacheForClustersAsPromised<string, string>({ namespace: 'idx-5-ttl', max: 10 });
+  const cache = new LRUCacheClustered<string, string>({ namespace: 'idx-5-ttl', max: 10 });
   await cache.set('k', 'v', { ttl: 50 });
   await new Promise((r) => setTimeout(r, 20));
   const before = await cache.getRemainingTTL('k');
@@ -85,8 +85,8 @@ void test('primary-mode max setter preserves per-entry TTL metadata', async () =
 
 void test('namespace isolation between instances', async () => {
   caches.clear();
-  const a = new LRUCacheForClustersAsPromised({ namespace: 'iso-a' });
-  const b = new LRUCacheForClustersAsPromised({ namespace: 'iso-b' });
+  const a = new LRUCacheClustered({ namespace: 'iso-a' });
+  const b = new LRUCacheClustered({ namespace: 'iso-b' });
   await a.set('k', 'A');
   await b.set('k', 'B');
   assert.equal(await a.get('k'), 'A');
@@ -95,22 +95,22 @@ void test('namespace isolation between instances', async () => {
 
 void test('getInstance resolves to a usable cache', async () => {
   caches.clear();
-  const cache = await LRUCacheForClustersAsPromised.getInstance<string, string>({ namespace: 'gi', max: 5 });
+  const cache = await LRUCacheClustered.getInstance<string, string>({ namespace: 'gi', max: 5 });
   await cache.set('x', 'y');
   assert.equal(await cache.get('x'), 'y');
 });
 
 void test('getAllCaches returns the registry on primary', async () => {
   caches.clear();
-  new LRUCacheForClustersAsPromised({ namespace: 'gac', max: 5 });
-  const all = LRUCacheForClustersAsPromised.getAllCaches();
+  new LRUCacheClustered({ namespace: 'gac', max: 5 });
+  const all = LRUCacheClustered.getAllCaches();
   assert.ok(all instanceof Map);
   assert.ok(all.has('gac'));
 });
 
 void test('getCache returns the underlying lru-cache instance on primary', async () => {
   caches.clear();
-  const cache = new LRUCacheForClustersAsPromised<string, string>({ namespace: 'gc', max: 5 });
+  const cache = new LRUCacheClustered<string, string>({ namespace: 'gc', max: 5 });
   await cache.set('a', 'b');
   const inner = cache.getCache();
   assert.ok(inner);
@@ -118,19 +118,19 @@ void test('getCache returns the underlying lru-cache instance on primary', async
 });
 
 void test('bootstrap is idempotent on primary', () => {
-  assert.doesNotThrow(() => LRUCacheForClustersAsPromised.bootstrap());
-  assert.doesNotThrow(() => LRUCacheForClustersAsPromised.bootstrap());
+  assert.doesNotThrow(() => LRUCacheClustered.bootstrap());
+  assert.doesNotThrow(() => LRUCacheClustered.bootstrap());
 });
 
 void test('healthCheck resolves on primary', async () => {
   caches.clear();
-  const cache = new LRUCacheForClustersAsPromised<string, string>({ namespace: 'health-1', max: 5 });
+  const cache = new LRUCacheClustered<string, string>({ namespace: 'health-1', max: 5 });
   await assert.doesNotReject(cache.healthCheck());
 });
 
 void test('peek does not promote, dump and purgeStale work', async () => {
   caches.clear();
-  const cache = new LRUCacheForClustersAsPromised<string, string>({ namespace: 'pdp', max: 3 });
+  const cache = new LRUCacheClustered<string, string>({ namespace: 'pdp', max: 3 });
   await cache.set('a', 'A');
   await cache.set('b', 'B');
   await cache.set('c', 'C');
@@ -150,7 +150,7 @@ void test('peek does not promote, dump and purgeStale work', async () => {
 
 void test('set with ttl and mSet with ttl', async () => {
   caches.clear();
-  const cache = new LRUCacheForClustersAsPromised<string, string>({ namespace: 'ttl-opt', max: 10 });
+  const cache = new LRUCacheClustered<string, string>({ namespace: 'ttl-opt', max: 10 });
   await cache.set('a', 'A', { ttl: 50_000 });
   await cache.mSet(
     [
@@ -166,7 +166,7 @@ void test('set with ttl and mSet with ttl', async () => {
 
 void test('size-bounded caches accept size on set/setIfAbsent/mSet', async () => {
   caches.clear();
-  const cache = new LRUCacheForClustersAsPromised<string, string>({
+  const cache = new LRUCacheClustered<string, string>({
     namespace: 'size-opt',
     maxSize: 10,
     maxEntrySize: 10,
@@ -185,15 +185,15 @@ void test('size-bounded caches accept size on set/setIfAbsent/mSet', async () =>
 
 void test('destroy removes a namespace and later reuse recreates it with original options', async () => {
   caches.clear();
-  const cache = new LRUCacheForClustersAsPromised<string, string>({
+  const cache = new LRUCacheClustered<string, string>({
     namespace: 'destroy-1',
     max: 10,
     ttl: 1_000,
   });
   await cache.set('before', 'A');
-  assert.equal(LRUCacheForClustersAsPromised.getAllCaches().has('destroy-1'), true);
+  assert.equal(LRUCacheClustered.getAllCaches().has('destroy-1'), true);
   assert.equal(await cache.destroy(), true);
-  assert.equal(LRUCacheForClustersAsPromised.getAllCaches().has('destroy-1'), false);
+  assert.equal(LRUCacheClustered.getAllCaches().has('destroy-1'), false);
 
   await cache.set('after', 'B');
   const ttl = await cache.getRemainingTTL('after');
@@ -202,7 +202,7 @@ void test('destroy removes a namespace and later reuse recreates it with origina
 
 void test('primary-mode rejects nullish keys and values', async () => {
   caches.clear();
-  const cache = new LRUCacheForClustersAsPromised<string, string>({ namespace: 'nullish', max: 10 });
+  const cache = new LRUCacheClustered<string, string>({ namespace: 'nullish', max: 10 });
   await assert.rejects(cache.set(undefined as never, 'v'), /cache key must not be null or undefined/);
   await assert.rejects(cache.set('k', undefined as never), /cache value must not be null or undefined/);
   await assert.rejects(cache.get(null as never), /cache key must not be null or undefined/);
@@ -210,12 +210,12 @@ void test('primary-mode rejects nullish keys and values', async () => {
 
 void test('options defaults and explicit failsafe=reject', () => {
   caches.clear();
-  const cdef = new LRUCacheForClustersAsPromised();
+  const cdef = new LRUCacheClustered();
   assert.equal(cdef.namespace, 'default');
   assert.equal(cdef.timeout, 100);
   assert.equal(cdef.failsafe, 'resolve');
 
-  const ccustom = new LRUCacheForClustersAsPromised({
+  const ccustom = new LRUCacheClustered({
     namespace: 'cn',
     timeout: 250,
     failsafe: 'reject',
@@ -227,13 +227,13 @@ void test('options defaults and explicit failsafe=reject', () => {
 
 void test('namespace re-init rejects conflicting cache options', () => {
   caches.clear();
-  new LRUCacheForClustersAsPromised({ namespace: 'conflict', max: 1, ttl: 111 });
-  assert.throws(() => new LRUCacheForClustersAsPromised({ namespace: 'conflict', max: 2 }), /Conflicting options/);
+  new LRUCacheClustered({ namespace: 'conflict', max: 1, ttl: 111 });
+  assert.throws(() => new LRUCacheClustered({ namespace: 'conflict', max: 2 }), /Conflicting options/);
 });
 
 void test('dispatch rejects when handler throws', async () => {
   caches.clear();
-  const cache = new LRUCacheForClustersAsPromised<string, string>({
+  const cache = new LRUCacheClustered<string, string>({
     namespace: 'errpath',
     max: 10,
   });
@@ -249,7 +249,7 @@ void test('dispatch rejects when handler throws', async () => {
 
 void test('dispatch wraps non-Error rejections in Error', async () => {
   caches.clear();
-  const cache = new LRUCacheForClustersAsPromised<string, string>({
+  const cache = new LRUCacheClustered<string, string>({
     namespace: 'nonerr',
     max: 10,
   });
@@ -269,14 +269,14 @@ void test('dispatch wraps non-Error rejections in Error', async () => {
 
 void test('decr accepts ttl option', async () => {
   caches.clear();
-  const cache = new LRUCacheForClustersAsPromised<string, number>({ namespace: 'decr-ttl', max: 10 });
+  const cache = new LRUCacheClustered<string, number>({ namespace: 'decr-ttl', max: 10 });
   const v = await cache.decr('counter', 2, { ttl: 60_000 });
   assert.equal(v, -2);
 });
 
 void test('counters reuse their existing size metadata in maxSize caches', async () => {
   caches.clear();
-  const cache = new LRUCacheForClustersAsPromised<string, number>({
+  const cache = new LRUCacheClustered<string, number>({
     namespace: 'counter-size',
     maxSize: 10,
   });
@@ -287,13 +287,13 @@ void test('counters reuse their existing size metadata in maxSize caches', async
 
 void test('ready resolves to undefined in primary mode', async () => {
   caches.clear();
-  const cache = new LRUCacheForClustersAsPromised<string, string>({ namespace: 'ready-1' });
+  const cache = new LRUCacheClustered<string, string>({ namespace: 'ready-1' });
   assert.equal(await cache.ready, undefined);
 });
 
 void test('getRemainingTTL returns a number consistent with ttl presence', async () => {
   caches.clear();
-  const cache = new LRUCacheForClustersAsPromised<string, string>({ namespace: 'rt-1', max: 10 });
+  const cache = new LRUCacheClustered<string, string>({ namespace: 'rt-1', max: 10 });
   await cache.set('with-ttl', 'v', { ttl: 60_000 });
   await cache.set('no-ttl', 'v');
   const withTtl = await cache.getRemainingTTL('with-ttl');
@@ -309,7 +309,7 @@ void test('getRemainingTTL returns a number consistent with ttl presence', async
 
 void test('setIfAbsent returns true on first call, false on second', async () => {
   caches.clear();
-  const cache = new LRUCacheForClustersAsPromised<string, string>({ namespace: 'sia-1', max: 10 });
+  const cache = new LRUCacheClustered<string, string>({ namespace: 'sia-1', max: 10 });
   assert.equal(await cache.setIfAbsent('k', 'first'), true);
   assert.equal(await cache.setIfAbsent('k', 'second'), false);
   assert.equal(await cache.get('k'), 'first');
@@ -317,7 +317,7 @@ void test('setIfAbsent returns true on first call, false on second', async () =>
 
 void test('setIfAbsent honors ttl on first set', async () => {
   caches.clear();
-  const cache = new LRUCacheForClustersAsPromised<string, string>({ namespace: 'sia-2', max: 10 });
+  const cache = new LRUCacheClustered<string, string>({ namespace: 'sia-2', max: 10 });
   assert.equal(await cache.setIfAbsent('k', 'v', { ttl: 50_000 }), true);
   const ttl = await cache.getRemainingTTL('k');
   assert.ok(ttl > 0 && ttl <= 50_000);
@@ -325,7 +325,7 @@ void test('setIfAbsent honors ttl on first set', async () => {
 
 void test('load restores a previously dumped cache', async () => {
   caches.clear();
-  const cache = new LRUCacheForClustersAsPromised<string, string>({ namespace: 'load-1', max: 10 });
+  const cache = new LRUCacheClustered<string, string>({ namespace: 'load-1', max: 10 });
   await cache.set('a', 'A');
   await cache.set('b', 'B');
   const dump = await cache.dump();
@@ -338,7 +338,7 @@ void test('load restores a previously dumped cache', async () => {
 
 void test('stats() returns counters that update with cache activity', async () => {
   caches.clear();
-  const cache = new LRUCacheForClustersAsPromised<string, string>({ namespace: 'stats-1', max: 10 });
+  const cache = new LRUCacheClustered<string, string>({ namespace: 'stats-1', max: 10 });
   const s0 = await cache.stats();
   assert.equal(s0.namespace, 'stats-1');
   assert.equal(typeof s0.hits, 'number');
@@ -360,7 +360,7 @@ void test('stats() returns counters that update with cache activity', async () =
 
 void test('incr with ttl preserves TTL across subsequent ttl-less incrs', async () => {
   caches.clear();
-  const cache = new LRUCacheForClustersAsPromised<string, number>({ namespace: 'incr-ttl', max: 10 });
+  const cache = new LRUCacheClustered<string, number>({ namespace: 'incr-ttl', max: 10 });
   await cache.incr('counter', 1, { ttl: 50_000 });
   const ttl1 = await cache.getRemainingTTL('counter');
   assert.ok(ttl1 > 0 && ttl1 <= 50_000);
@@ -376,7 +376,7 @@ void test('incr with ttl preserves TTL across subsequent ttl-less incrs', async 
 
 void test('[Symbol.asyncIterator] yields all entries', async () => {
   caches.clear();
-  const cache = new LRUCacheForClustersAsPromised<string, number>({ namespace: 'aiter-1', max: 10 });
+  const cache = new LRUCacheClustered<string, number>({ namespace: 'aiter-1', max: 10 });
   await cache.set('a', 1);
   await cache.set('b', 2);
   await cache.set('c', 3);
@@ -392,7 +392,7 @@ void test('[Symbol.asyncIterator] yields all entries', async () => {
 
 void test('fetch dedups concurrent calls and caches result', async () => {
   caches.clear();
-  const cache = new LRUCacheForClustersAsPromised<string, string>({ namespace: 'fetch-1', max: 10 });
+  const cache = new LRUCacheClustered<string, string>({ namespace: 'fetch-1', max: 10 });
   let calls = 0;
   const fetcher = async (k: string) => {
     calls++;
@@ -419,7 +419,7 @@ void test('fetch dedups concurrent calls and caches result', async () => {
 
 void test('fetch shares a single miss-path get across concurrent callers', async () => {
   caches.clear();
-  const cache = new LRUCacheForClustersAsPromised<string, number>({ namespace: 'fetch-get-dedup', max: 10 });
+  const cache = new LRUCacheClustered<string, number>({ namespace: 'fetch-get-dedup', max: 10 });
   let getCalls = 0;
   let fetchCalls = 0;
 
@@ -443,8 +443,8 @@ void test('fetch shares a single miss-path get across concurrent callers', async
 void test('fetch followers in another instance reuse the leader result', async () => {
   caches.clear();
   const namespace = 'fetch-cross-instance-follower';
-  const leaderCache = new LRUCacheForClustersAsPromised<string, string>({ namespace, max: 10 });
-  const followerCache = new LRUCacheForClustersAsPromised<string, string>({ namespace, max: 10 });
+  const leaderCache = new LRUCacheClustered<string, string>({ namespace, max: 10 });
+  const followerCache = new LRUCacheClustered<string, string>({ namespace, max: 10 });
   const originalPeek = followerCache.peek.bind(followerCache);
   let releaseLeader!: () => void;
   let leaderEntered!: () => void;
@@ -488,7 +488,7 @@ void test('fetch followers in another instance reuse the leader result', async (
 
 void test('fetch with forceRefresh re-invokes fetcher', async () => {
   caches.clear();
-  const cache = new LRUCacheForClustersAsPromised<string, number>({ namespace: 'fetch-2', max: 10 });
+  const cache = new LRUCacheClustered<string, number>({ namespace: 'fetch-2', max: 10 });
   let calls = 0;
   const fetcher = async () => {
     calls++;
@@ -502,7 +502,7 @@ void test('fetch with forceRefresh re-invokes fetcher', async () => {
 
 void test('fetch accepts size-bounded writes', async () => {
   caches.clear();
-  const cache = new LRUCacheForClustersAsPromised<string, string>({
+  const cache = new LRUCacheClustered<string, string>({
     namespace: 'fetch-size',
     maxSize: 10,
   });
@@ -518,7 +518,7 @@ void test('fetch accepts size-bounded writes', async () => {
 
 void test('fetch forceRefresh ignores stale in-flight result', async () => {
   caches.clear();
-  const cache = new LRUCacheForClustersAsPromised<string, number>({ namespace: 'fetch-force', max: 10 });
+  const cache = new LRUCacheClustered<string, number>({ namespace: 'fetch-force', max: 10 });
 
   // First in-flight fetcher returns a stale value.
   const stale = async () => {
@@ -542,7 +542,7 @@ void test('fetch forceRefresh ignores stale in-flight result', async () => {
 
 void test('fetch forceRefresh keeps the refreshed value cached when an older fetch finishes later', async () => {
   caches.clear();
-  const cache = new LRUCacheForClustersAsPromised<string, number>({ namespace: 'fetch-force-final', max: 10 });
+  const cache = new LRUCacheClustered<string, number>({ namespace: 'fetch-force-final', max: 10 });
 
   const stale = async () => {
     await new Promise((r) => setTimeout(r, 20));
@@ -560,7 +560,7 @@ void test('fetch forceRefresh keeps the refreshed value cached when an older fet
 
 void test('fetch propagates fetcher errors and clears in-flight slot', async () => {
   caches.clear();
-  const cache = new LRUCacheForClustersAsPromised<string, string>({ namespace: 'fetch-3', max: 10 });
+  const cache = new LRUCacheClustered<string, string>({ namespace: 'fetch-3', max: 10 });
   let calls = 0;
   const failing = async () => {
     calls++;
@@ -579,7 +579,7 @@ void test('fetch propagates fetcher errors and clears in-flight slot', async () 
 
 void test('fetch preserves fetcher errors when abort cleanup also fails', async () => {
   caches.clear();
-  const cache = new LRUCacheForClustersAsPromised<string, string>({ namespace: 'fetch-cleanup-failure', max: 10 });
+  const cache = new LRUCacheClustered<string, string>({ namespace: 'fetch-cleanup-failure', max: 10 });
   const state = (globalThis as Record<PropertyKey, unknown>)[Symbol.for('lru-cache-clustered.primary')] as {
     fetchLocks: Map<unknown, unknown>;
   };
@@ -609,7 +609,7 @@ void test('fetch preserves fetcher errors when abort cleanup also fails', async 
 // handler — equivalent to what the worker would receive over JSON IPC.
 void test('mGet normalizes null pairs to undefined (JSON IPC compatibility)', async () => {
   caches.clear();
-  const cache = new LRUCacheForClustersAsPromised<string, string>({ namespace: 'mget-null-norm', max: 10 });
+  const cache = new LRUCacheClustered<string, string>({ namespace: 'mget-null-norm', max: 10 });
   await cache.set('a', 'A');
 
   const inner = caches.get('mget-null-norm');
@@ -631,7 +631,7 @@ void test('mGet normalizes null pairs to undefined (JSON IPC compatibility)', as
 // normalization restores the documented `Infinity` contract.
 void test('getRemainingTTL normalizes null to Infinity (JSON IPC compatibility)', async () => {
   caches.clear();
-  const cache = new LRUCacheForClustersAsPromised<string, string>({ namespace: 'rttl-null-norm', max: 10 });
+  const cache = new LRUCacheClustered<string, string>({ namespace: 'rttl-null-norm', max: 10 });
   await cache.set('k', 'v');
 
   const inner = caches.get('rttl-null-norm');
@@ -643,7 +643,7 @@ void test('getRemainingTTL normalizes null to Infinity (JSON IPC compatibility)'
 });
 
 void test('constructor accepts localL1 option (boolean shorthand)', () => {
-  const c = new LRUCacheForClustersAsPromised({
+  const c = new LRUCacheClustered({
     namespace: 'l1-bool',
     max: 10,
     localL1: { enabled: true, experimental: true },
@@ -657,7 +657,7 @@ void test('constructor accepts localL1 option (boolean shorthand)', () => {
 });
 
 void test('constructor accepts localL1 option (object form)', () => {
-  const c = new LRUCacheForClustersAsPromised({
+  const c = new LRUCacheClustered({
     namespace: 'l1-obj',
     max: 10,
     ttl: 60_000,
@@ -667,13 +667,13 @@ void test('constructor accepts localL1 option (object form)', () => {
 });
 
 void test('localL1 disabled by default returns undefined from localStats', () => {
-  const c = new LRUCacheForClustersAsPromised({ namespace: 'l1-default', max: 10 });
+  const c = new LRUCacheClustered({ namespace: 'l1-default', max: 10 });
   assert.equal(c.localStats(), undefined);
 });
 
 void test('localL1 ttl clamps to primary ttl when greater', () => {
   // Construction succeeds; behaviour is exercised in later tasks.
-  const c = new LRUCacheForClustersAsPromised({
+  const c = new LRUCacheClustered({
     namespace: 'l1-clamp',
     max: 10,
     ttl: 1000,
@@ -683,17 +683,17 @@ void test('localL1 ttl clamps to primary ttl when greater', () => {
 });
 
 void test('clearLocal is a no-op when L1 disabled', () => {
-  const c = new LRUCacheForClustersAsPromised({ namespace: 'l1-noop' });
+  const c = new LRUCacheClustered({ namespace: 'l1-noop' });
   c.clearLocal(); // does not throw
 });
 
 void test('invalidateLocal is a no-op when L1 disabled', () => {
-  const c = new LRUCacheForClustersAsPromised({ namespace: 'l1-noop-2' });
+  const c = new LRUCacheClustered({ namespace: 'l1-noop-2' });
   c.invalidateLocal('nope'); // does not throw
 });
 
 void test('get with L1 enabled hits L1 on second read in primary mode', async () => {
-  const c = new LRUCacheForClustersAsPromised<string, number>({
+  const c = new LRUCacheClustered<string, number>({
     namespace: 'l1-get',
     max: 10,
     localL1: { enabled: true, experimental: true, ttl: 1000 },
@@ -716,7 +716,7 @@ void test('get with L1 enabled hits L1 on second read in primary mode', async ()
 });
 
 void test('get with bypassL1: true skips L1 entirely', async () => {
-  const c = new LRUCacheForClustersAsPromised<string, number>({
+  const c = new LRUCacheClustered<string, number>({
     namespace: 'l1-bypass',
     max: 10,
     localL1: { enabled: true, experimental: true, ttl: 1000 },
@@ -730,7 +730,7 @@ void test('get with bypassL1: true skips L1 entirely', async () => {
 });
 
 void test('get returns undefined for missing key without populating L1', async () => {
-  const c = new LRUCacheForClustersAsPromised<string, number>({
+  const c = new LRUCacheClustered<string, number>({
     namespace: 'l1-miss',
     max: 10,
     localL1: { enabled: true, experimental: true, ttl: 1000 },
@@ -740,7 +740,7 @@ void test('get returns undefined for missing key without populating L1', async (
 });
 
 void test('set self-invalidates the calling worker L1 entry', async () => {
-  const c = new LRUCacheForClustersAsPromised<string, number>({
+  const c = new LRUCacheClustered<string, number>({
     namespace: 'l1-self-inv',
     max: 10,
     localL1: { enabled: true, experimental: true, ttl: 1000 },
@@ -754,7 +754,7 @@ void test('set self-invalidates the calling worker L1 entry', async () => {
 });
 
 void test('has with L1 enabled hits L1 after a populating get', async () => {
-  const c = new LRUCacheForClustersAsPromised<string, number>({
+  const c = new LRUCacheClustered<string, number>({
     namespace: 'l1-has',
     max: 10,
     localL1: { enabled: true, experimental: true, ttl: 1000 },
@@ -768,7 +768,7 @@ void test('has with L1 enabled hits L1 after a populating get', async () => {
 });
 
 void test('peek with L1 enabled hits L1 (peek is a read)', async () => {
-  const c = new LRUCacheForClustersAsPromised<string, number>({
+  const c = new LRUCacheClustered<string, number>({
     namespace: 'l1-peek',
     max: 10,
     localL1: { enabled: true, experimental: true, ttl: 1000 },
@@ -782,7 +782,7 @@ void test('peek with L1 enabled hits L1 (peek is a read)', async () => {
 });
 
 void test('delete self-invalidates and advances latestSeen', async () => {
-  const c = new LRUCacheForClustersAsPromised<string, number>({
+  const c = new LRUCacheClustered<string, number>({
     namespace: 'l1-del',
     max: 10,
     localL1: { enabled: true, experimental: true, ttl: 1000 },
@@ -794,7 +794,7 @@ void test('delete self-invalidates and advances latestSeen', async () => {
 });
 
 void test('clear wipes the local L1 too', async () => {
-  const c = new LRUCacheForClustersAsPromised<string, number>({
+  const c = new LRUCacheClustered<string, number>({
     namespace: 'l1-clear',
     max: 10,
     localL1: { enabled: true, experimental: true, ttl: 1000 },
@@ -809,7 +809,7 @@ void test('clear wipes the local L1 too', async () => {
 });
 
 void test('setIfAbsent self-invalidates regardless of outcome', async () => {
-  const c = new LRUCacheForClustersAsPromised<string, number>({
+  const c = new LRUCacheClustered<string, number>({
     namespace: 'l1-sia',
     max: 10,
     localL1: { enabled: true, experimental: true, ttl: 1000 },
@@ -825,7 +825,7 @@ void test('setIfAbsent self-invalidates regardless of outcome', async () => {
 });
 
 void test('mGet with L1 hits each present key in L1 after populate', async () => {
-  const c = new LRUCacheForClustersAsPromised<string, number>({
+  const c = new LRUCacheClustered<string, number>({
     namespace: 'l1-mget',
     max: 10,
     localL1: { enabled: true, experimental: true, ttl: 1000 },
@@ -842,7 +842,7 @@ void test('mGet with L1 hits each present key in L1 after populate', async () =>
 });
 
 void test('mSet bulk-clears local L1', async () => {
-  const c = new LRUCacheForClustersAsPromised<string, number>({
+  const c = new LRUCacheClustered<string, number>({
     namespace: 'l1-mset',
     max: 10,
     localL1: { enabled: true, experimental: true, ttl: 1000 },
@@ -858,7 +858,7 @@ void test('mSet bulk-clears local L1', async () => {
 });
 
 void test('incr self-invalidates own L1 entry on the calling worker', async () => {
-  const c = new LRUCacheForClustersAsPromised<string, number>({
+  const c = new LRUCacheClustered<string, number>({
     namespace: 'l1-incr',
     max: 10,
     localL1: { enabled: true, experimental: true, ttl: 1000 },
@@ -872,7 +872,7 @@ void test('incr self-invalidates own L1 entry on the calling worker', async () =
 });
 
 void test('withoutLocal() routes reads past L1', async () => {
-  const c = new LRUCacheForClustersAsPromised<string, number>({
+  const c = new LRUCacheClustered<string, number>({
     namespace: 'l1-without',
     max: 10,
     localL1: { enabled: true, experimental: true, ttl: 1000 },
@@ -887,7 +887,7 @@ void test('withoutLocal() routes reads past L1', async () => {
 });
 
 void test('withoutLocal().set still self-invalidates the underlying L1', async () => {
-  const c = new LRUCacheForClustersAsPromised<string, number>({
+  const c = new LRUCacheClustered<string, number>({
     namespace: 'l1-without-set',
     max: 10,
     localL1: { enabled: true, experimental: true, ttl: 1000 },
@@ -903,7 +903,7 @@ void test('withoutLocal().set still self-invalidates the underlying L1', async (
 });
 
 void test('withoutLocal() is idempotent', async () => {
-  const c = new LRUCacheForClustersAsPromised<string, number>({
+  const c = new LRUCacheClustered<string, number>({
     namespace: 'l1-without-idem',
     max: 10,
     localL1: { enabled: true, experimental: true, ttl: 1000 },
@@ -915,7 +915,7 @@ void test('withoutLocal() is idempotent', async () => {
 });
 
 void test('l1:hit and l1:miss events fire', async () => {
-  const c = new LRUCacheForClustersAsPromised<string, number>({
+  const c = new LRUCacheClustered<string, number>({
     namespace: 'l1-events',
     max: 10,
     localL1: { enabled: true, experimental: true, ttl: 1000 },
@@ -932,7 +932,7 @@ void test('l1:hit and l1:miss events fire', async () => {
 });
 
 void test('l1:invalidate event fires on set self-invalidate', async () => {
-  const c = new LRUCacheForClustersAsPromised<string, number>({
+  const c = new LRUCacheClustered<string, number>({
     namespace: 'l1-inv-evt',
     max: 10,
     localL1: { enabled: true, experimental: true, ttl: 1000 },
@@ -946,7 +946,7 @@ void test('l1:invalidate event fires on set self-invalidate', async () => {
 });
 
 void test('off() removes a listener', () => {
-  const c = new LRUCacheForClustersAsPromised<string, number>({
+  const c = new LRUCacheClustered<string, number>({
     namespace: 'l1-off-evt',
     max: 10,
     localL1: { enabled: true, experimental: true, ttl: 1000 },
@@ -965,7 +965,7 @@ void test('off() removes a listener', () => {
 void test('localL1 enabled without experimental: true throws', () => {
   assert.throws(
     () =>
-      new LRUCacheForClustersAsPromised({
+      new LRUCacheClustered({
         namespace: 'l1-gated',
         max: 10,
         localL1: { enabled: true, ttl: 1000 },
@@ -975,7 +975,7 @@ void test('localL1 enabled without experimental: true throws', () => {
 });
 
 void test('localL1 enabled with experimental: true works', () => {
-  const c = new LRUCacheForClustersAsPromised({
+  const c = new LRUCacheClustered({
     namespace: 'l1-gated-ok',
     max: 10,
     localL1: { enabled: true, experimental: true, ttl: 1000 },

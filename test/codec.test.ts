@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { gzipSync, gunzipSync } from 'node:zlib';
-import { LRUCacheForClustersAsPromised } from '../src/index.ts';
+import { LRUCacheClustered } from '../src/index.ts';
 import { wrap, type Codec } from '../src/codec.ts';
 import { caches } from '../src/primary.ts';
 
@@ -23,7 +23,7 @@ const identityCodec: Codec<string, string> = {
 
 void test('wrap: get/set round-trips through gzip codec', async () => {
   caches.clear();
-  const inner = new LRUCacheForClustersAsPromised<string, Buffer>({ namespace: 'codec-rt', max: 10 });
+  const inner = new LRUCacheClustered<string, Buffer>({ namespace: 'codec-rt', max: 10 });
   const c = wrap(inner, gzipJsonCodec);
   await c.set('user', { id: 42, name: 'ada' });
   const got = (await c.get('user')) as { id: number; name: string } | undefined;
@@ -43,7 +43,7 @@ void test('wrap: get returns undefined for missing keys without invoking decode'
       return v;
     },
   };
-  const inner = new LRUCacheForClustersAsPromised<string, string>({ namespace: 'codec-miss', max: 10 });
+  const inner = new LRUCacheClustered<string, string>({ namespace: 'codec-miss', max: 10 });
   const c = wrap(inner, codec);
   assert.equal(await c.get('nope'), undefined);
   assert.equal(decodeCalls, 0);
@@ -51,7 +51,7 @@ void test('wrap: get returns undefined for missing keys without invoking decode'
 
 void test('wrap: setIfAbsent encodes and respects existing entry', async () => {
   caches.clear();
-  const inner = new LRUCacheForClustersAsPromised<string, Buffer>({ namespace: 'codec-sia', max: 10 });
+  const inner = new LRUCacheClustered<string, Buffer>({ namespace: 'codec-sia', max: 10 });
   const c = wrap(inner, gzipJsonCodec);
   assert.equal(await c.setIfAbsent('k', { v: 1 }), true);
   assert.equal(await c.setIfAbsent('k', { v: 2 }), false);
@@ -60,14 +60,14 @@ void test('wrap: setIfAbsent encodes and respects existing entry', async () => {
 
 void test('wrap: peek returns undefined for missing keys', async () => {
   caches.clear();
-  const inner = new LRUCacheForClustersAsPromised<string, string>({ namespace: 'codec-peek-miss', max: 10 });
+  const inner = new LRUCacheClustered<string, string>({ namespace: 'codec-peek-miss', max: 10 });
   const c = wrap(inner, identityCodec);
   assert.equal(await c.peek('nope'), undefined);
 });
 
 void test('wrap: peek decodes without promoting LRU position', async () => {
   caches.clear();
-  const inner = new LRUCacheForClustersAsPromised<string, Buffer>({ namespace: 'codec-peek', max: 3 });
+  const inner = new LRUCacheClustered<string, Buffer>({ namespace: 'codec-peek', max: 3 });
   const c = wrap(inner, gzipJsonCodec);
   await c.set('a', 'A');
   await c.set('b', 'B');
@@ -80,7 +80,7 @@ void test('wrap: peek decodes without promoting LRU position', async () => {
 
 void test('wrap: mGet/mSet round-trip through codec', async () => {
   caches.clear();
-  const inner = new LRUCacheForClustersAsPromised<string, Buffer>({ namespace: 'codec-multi', max: 10 });
+  const inner = new LRUCacheClustered<string, Buffer>({ namespace: 'codec-multi', max: 10 });
   const c = wrap(inner, gzipJsonCodec);
   await c.mSet([
     ['a', { n: 1 }],
@@ -99,7 +99,7 @@ void test('wrap: mGet/mSet round-trip through codec', async () => {
 
 void test('wrap: keys/values/entries decode appropriately', async () => {
   caches.clear();
-  const inner = new LRUCacheForClustersAsPromised<string, Buffer>({ namespace: 'codec-enum', max: 10 });
+  const inner = new LRUCacheClustered<string, Buffer>({ namespace: 'codec-enum', max: 10 });
   const c = wrap(inner, gzipJsonCodec);
   await c.set('x', { v: 'X' });
   await c.set('y', { v: 'Y' });
@@ -113,7 +113,7 @@ void test('wrap: keys/values/entries decode appropriately', async () => {
 
 void test('wrap: [Symbol.asyncIterator] yields decoded entries', async () => {
   caches.clear();
-  const inner = new LRUCacheForClustersAsPromised<string, Buffer>({ namespace: 'codec-iter', max: 10 });
+  const inner = new LRUCacheClustered<string, Buffer>({ namespace: 'codec-iter', max: 10 });
   const c = wrap(inner, gzipJsonCodec);
   await c.set('a', 1);
   await c.set('b', 2);
@@ -127,7 +127,7 @@ void test('wrap: [Symbol.asyncIterator] yields decoded entries', async () => {
 
 void test('wrap: fetch dedups concurrent calls and decodes the cached value', async () => {
   caches.clear();
-  const inner = new LRUCacheForClustersAsPromised<string, Buffer>({ namespace: 'codec-fetch', max: 10 });
+  const inner = new LRUCacheClustered<string, Buffer>({ namespace: 'codec-fetch', max: 10 });
   const c = wrap(inner, gzipJsonCodec);
   let calls = 0;
   const fetcher = async (key: string) => {
@@ -147,7 +147,7 @@ void test('wrap: fetch dedups concurrent calls and decodes the cached value', as
 
 void test('wrap: fetch with forceRefresh re-invokes fetcher', async () => {
   caches.clear();
-  const inner = new LRUCacheForClustersAsPromised<string, string>({ namespace: 'codec-force', max: 10 });
+  const inner = new LRUCacheClustered<string, string>({ namespace: 'codec-force', max: 10 });
   const c = wrap(inner, identityCodec);
   let calls = 0;
   const fetcher = () => {
@@ -171,7 +171,7 @@ void test('wrap: async codec works (Promise-returning encode/decode)', async () 
       return raw.replace(/^enc:/, '');
     },
   };
-  const inner = new LRUCacheForClustersAsPromised<string, string>({ namespace: 'codec-async', max: 10 });
+  const inner = new LRUCacheClustered<string, string>({ namespace: 'codec-async', max: 10 });
   const c = wrap(inner, codec);
   await c.set('k', 'hello');
   assert.equal(await inner.get('k'), 'enc:hello');
@@ -180,7 +180,7 @@ void test('wrap: async codec works (Promise-returning encode/decode)', async () 
 
 void test('wrap: passthrough methods (has/delete/clear/size/getRemainingTTL/purgeStale) work', async () => {
   caches.clear();
-  const inner = new LRUCacheForClustersAsPromised<string, string>({ namespace: 'codec-pass', max: 10, ttl: 60_000 });
+  const inner = new LRUCacheClustered<string, string>({ namespace: 'codec-pass', max: 10, ttl: 60_000 });
   const c = wrap(inner, identityCodec);
   await c.set('a', 'A');
   assert.equal(await c.has('a'), true);
@@ -198,7 +198,7 @@ void test('wrap: passthrough methods (has/delete/clear/size/getRemainingTTL/purg
 
 void test('wrap: size-bounded caches and lifecycle passthroughs work', async () => {
   caches.clear();
-  const inner = new LRUCacheForClustersAsPromised<string, string>({
+  const inner = new LRUCacheClustered<string, string>({
     namespace: 'codec-size-pass',
     maxSize: 10,
     ttl: 1_000,
@@ -215,7 +215,7 @@ void test('wrap: size-bounded caches and lifecycle passthroughs work', async () 
 
 void test('wrap: stats reflect underlying cache activity', async () => {
   caches.clear();
-  const inner = new LRUCacheForClustersAsPromised<string, string>({ namespace: 'codec-stats', max: 10 });
+  const inner = new LRUCacheClustered<string, string>({ namespace: 'codec-stats', max: 10 });
   const c = wrap(inner, identityCodec);
   const s0 = await c.stats();
   await c.set('k', 'v');
@@ -237,7 +237,7 @@ void test('wrap: encode errors propagate from set', async () => {
     },
     decode: (v) => v,
   };
-  const inner = new LRUCacheForClustersAsPromised<string, string>({ namespace: 'codec-enc-err', max: 10 });
+  const inner = new LRUCacheClustered<string, string>({ namespace: 'codec-enc-err', max: 10 });
   const c = wrap(inner, codec);
   await assert.rejects(c.set('k', 'v'), /encode failed/);
   assert.equal(await inner.size(), 0);
@@ -251,7 +251,7 @@ void test('wrap: decode errors propagate from get', async () => {
       throw new Error('decode failed');
     },
   };
-  const inner = new LRUCacheForClustersAsPromised<string, string>({ namespace: 'codec-dec-err', max: 10 });
+  const inner = new LRUCacheClustered<string, string>({ namespace: 'codec-dec-err', max: 10 });
   const c = wrap(inner, codec);
   await c.set('k', 'v');
   await assert.rejects(c.get('k'), /decode failed/);
@@ -259,7 +259,7 @@ void test('wrap: decode errors propagate from get', async () => {
 
 void test('wrap: exposes underlying cache via .cache for escape hatches', async () => {
   caches.clear();
-  const inner = new LRUCacheForClustersAsPromised<string, Buffer>({ namespace: 'codec-escape', max: 10 });
+  const inner = new LRUCacheClustered<string, Buffer>({ namespace: 'codec-escape', max: 10 });
   const c = wrap(inner, gzipJsonCodec);
   assert.equal(c.cache.namespace, 'codec-escape');
   assert.equal(c.namespace, 'codec-escape');
@@ -274,7 +274,7 @@ void test('wrap: exposes underlying cache via .cache for escape hatches', async 
 });
 
 void test('wrap() forwards through L1', async () => {
-  const cache = new LRUCacheForClustersAsPromised<string, Buffer>({
+  const cache = new LRUCacheClustered<string, Buffer>({
     namespace: 'codec-l1',
     max: 10,
     localL1: { enabled: true, experimental: true, ttl: 1000 },

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { caches, handleRequest, stats } from '../src/primary.ts';
 import { SOURCE, type Request } from '../src/messages.ts';
-import { LRUCacheForClustersAsPromised } from '../src/index.ts';
+import { LRUCacheClustered } from '../src/index.ts';
 
 // Each iteration generates a fresh namespace; without clearing the full
 // registry the caches/stats Maps accumulate ~NUM_RUNS entries per test (and
@@ -205,7 +205,7 @@ void test('property: max(newCap) shrinks size to <= newCap', () => {
 });
 
 void test('fuzz: random ops with L1 enabled converge to bypass-L1 reads', async () => {
-  const c = new LRUCacheForClustersAsPromised<string, number>({
+  const c = new LRUCacheClustered<string, number>({
     namespace: 'fuzz-l1',
     max: 100,
     localL1: { enabled: true, experimental: true, ttl: 200 },

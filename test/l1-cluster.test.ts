@@ -4,7 +4,7 @@ import cluster from 'node:cluster';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as setTimer, clearTimeout as clearTimer } from 'node:timers';
-import { LRUCacheForClustersAsPromised } from '../src/index.ts';
+import { LRUCacheClustered } from '../src/index.ts';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -76,7 +76,7 @@ void test(
   { timeout: 15_000 },
   async () => {
     // Pre-create the namespace on primary so workers can find it.
-    new LRUCacheForClustersAsPromised({ namespace: 'l1-xworker', max: 100, ttl: 60_000 });
+    new LRUCacheClustered({ namespace: 'l1-xworker', max: 100, ttl: 60_000 });
     setupHarness();
 
     const a = await forkWorker();
@@ -110,7 +110,7 @@ void test(
 
 void test('incr from N workers: final count correct, no L1 race', { timeout: 15_000 }, async () => {
   // Pre-create the namespace on primary so workers can find it.
-  new LRUCacheForClustersAsPromised({ namespace: 'l1-incr', max: 10 });
+  new LRUCacheClustered({ namespace: 'l1-incr', max: 10 });
   setupHarness();
 
   const N = 4;
@@ -123,7 +123,7 @@ void test('incr from N workers: final count correct, no L1 race', { timeout: 15_
     // Allow any in-flight broadcasts to drain.
     await new Promise((r) => setTimeout(r, 100));
     // Read the final counter through the primary, bypassing all L1.
-    const primaryCache = new LRUCacheForClustersAsPromised<string, number>({ namespace: 'l1-incr' });
+    const primaryCache = new LRUCacheClustered<string, number>({ namespace: 'l1-incr' });
     const final = await primaryCache.get('counter', { bypassL1: true });
     assert.equal(final, N * PER);
   } finally {
@@ -133,7 +133,7 @@ void test('incr from N workers: final count correct, no L1 race', { timeout: 15_
 
 void test('clear from primary invalidates L1 in all workers', { timeout: 15_000 }, async () => {
   // Pre-create the namespace on primary so workers can find it.
-  new LRUCacheForClustersAsPromised({ namespace: 'l1-clear-all', max: 100 });
+  new LRUCacheClustered({ namespace: 'l1-clear-all', max: 100 });
   setupHarness();
 
   const a = await forkWorker();
@@ -147,7 +147,7 @@ void test('clear from primary invalidates L1 in all workers', { timeout: 15_000 
     await b.send('get', { options: opts, key: 'k1' });
     await b.send('get', { options: opts, key: 'k2' });
     // Primary clears
-    const primaryCache = new LRUCacheForClustersAsPromised({ namespace: 'l1-clear-all' });
+    const primaryCache = new LRUCacheClustered({ namespace: 'l1-clear-all' });
     await primaryCache.clear();
     // Let the broadcast propagate.
     await new Promise((r) => setTimeout(r, 100));

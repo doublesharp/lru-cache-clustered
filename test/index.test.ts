@@ -866,3 +866,46 @@ void test('incr self-invalidates own L1 entry on the calling worker', async () =
   const v = await c.get('count');
   assert.equal(v, 6);
 });
+
+void test('withoutLocal() routes reads past L1', async () => {
+  const c = new LRUCacheForClustersAsPromised<string, number>({
+    namespace: 'l1-without',
+    max: 10,
+    localL1: { enabled: true, ttl: 1000 },
+  });
+  await c.set('a', 1);
+  await c.get('a'); // populate L1
+  const before = c.localStats()?.hits ?? 0;
+  const fresh = c.withoutLocal();
+  const v = await fresh.get('a');
+  assert.equal(v, 1);
+  assert.equal(c.localStats()?.hits, before, 'withoutLocal does not register L1 hit');
+});
+
+void test('withoutLocal().set still self-invalidates the underlying L1', async () => {
+  const c = new LRUCacheForClustersAsPromised<string, number>({
+    namespace: 'l1-without-set',
+    max: 10,
+    localL1: { enabled: true, ttl: 1000 },
+  });
+  await c.set('a', 1);
+  await c.get('a'); // populate
+  const fresh = c.withoutLocal();
+  await fresh.set('a', 2);
+  // Underlying L1 entry should have been removed by self-invalidate, then
+  // re-fetched by the next bypassed read which sees the new L2 value.
+  const v = await c.get('a', { bypassL1: true });
+  assert.equal(v, 2);
+});
+
+void test('withoutLocal() is idempotent', async () => {
+  const c = new LRUCacheForClustersAsPromised<string, number>({
+    namespace: 'l1-without-idem',
+    max: 10,
+    localL1: { enabled: true, ttl: 1000 },
+  });
+  const a = c.withoutLocal();
+  const b = a.withoutLocal();
+  // The second call returns the same wrapper as the first.
+  assert.equal(a, b);
+});

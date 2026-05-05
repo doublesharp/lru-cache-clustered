@@ -492,6 +492,48 @@ export class LRUCacheForClustersAsPromised<K extends {} = string, V extends {} =
     }
   }
 
+  // Returns a proxy that shares all state with this instance but forces
+  // bypassL1: true on every L1-eligible read. Write methods pass through to
+  // the real instance so set/delete/etc still self-invalidate the underlying
+  // L1. Calling withoutLocal() on the returned proxy is idempotent - it
+  // returns the same proxy object.
+  //
+  // Implementation note: all method calls are routed through the Proxy target
+  // (the real instance) because private fields (#l1, etc.) are inaccessible
+  // on objects that are not genuine class instances. The Proxy get trap returns
+  // either a bypassL1-injecting override for read methods or the real
+  // instance's method bound to itself for everything else.
+  withoutLocal(): LRUCacheForClustersAsPromised<K, V> {
+    // Using `t` (the Proxy target = the real instance) inside the trap avoids
+    // a no-this-alias violation. All calls go through `t` so private fields
+    // (#l1, etc.) remain accessible on the real instance.
+    let wrapper: LRUCacheForClustersAsPromised<K, V>;
+    wrapper = new Proxy(this, {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      get(t, prop): any {
+        if (prop === 'withoutLocal') return () => wrapper;
+        if (prop === 'get') {
+          return (key: K, opts?: { bypassL1?: boolean }) => t.get(key, { ...opts, bypassL1: true });
+        }
+        if (prop === 'has') {
+          return (key: K, opts?: { bypassL1?: boolean }) => t.has(key, { ...opts, bypassL1: true });
+        }
+        if (prop === 'peek') {
+          return (key: K, opts?: { bypassL1?: boolean }) => t.peek(key, { ...opts, bypassL1: true });
+        }
+        if (prop === 'fetch') {
+          return (key: K, fetcher: (k: K) => V | Promise<V>, opts?: FetchOptions) =>
+            t.fetch(key, fetcher, { ...opts, bypassL1: true });
+        }
+        // All other properties: reflect from the real instance bound to it so
+        // private fields remain accessible.
+        const v = Reflect.get(t, prop, t);
+        return typeof v === 'function' ? (v as (...a: unknown[]) => unknown).bind(t) : v;
+      },
+    });
+    return wrapper;
+  }
+
   // Materializes the full entries array up front, then yields — simpler than
   // streaming over IPC at the cost of a single large payload per iteration.
   async *[Symbol.asyncIterator](): AsyncIterableIterator<[K, V]> {

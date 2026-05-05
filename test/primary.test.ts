@@ -1278,8 +1278,8 @@ void test('dispatchAndBroadcast fans out single-key invalidation to other worker
     assert.equal(typeof result.version, 'number');
     // Worker 1 is the caller; only worker 2 receives the broadcast
     assert.equal(sent.length, 1);
-    assert.equal(sent[0].workerId, 2);
-    const msg = sent[0].msg as { push: string; namespace: string; key: unknown; version: number };
+    assert.equal(sent[0]!.workerId, 2);
+    const msg = sent[0]!.msg as { push: string; namespace: string; key: unknown; version: number };
     assert.equal(msg.push, 'l1:invalidate');
     assert.equal(msg.namespace, 'broadcast-test');
     assert.equal(msg.key, 'k');

@@ -136,3 +136,24 @@ export function deserializeError(payload: SerializedError): Error {
   if (payload.cause !== undefined) (err as { cause?: unknown }).cause = deserializeError(payload.cause);
   return err;
 }
+
+// Pushes are primary-to-worker fire-and-forget messages with no `id` and no
+// matching response. The wire layer recognises them by the `push` discriminator
+// (and the shared SOURCE filter); they never collide with `Request`/`Response`.
+export type InvalidationPush =
+  | { source: Source; push: 'l1:invalidate'; namespace: string; key: unknown; version: number }
+  | { source: Source; push: 'l1:invalidate-namespace'; namespace: string; version: number };
+
+export function isInvalidationPush(value: unknown): value is InvalidationPush {
+  if (
+    typeof value !== 'object' ||
+    value === null ||
+    (value as { source?: unknown }).source !== SOURCE ||
+    typeof (value as { namespace?: unknown }).namespace !== 'string' ||
+    typeof (value as { version?: unknown }).version !== 'number'
+  ) {
+    return false;
+  }
+  const push = (value as { push?: unknown }).push;
+  return push === 'l1:invalidate' || push === 'l1:invalidate-namespace';
+}

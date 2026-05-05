@@ -10,6 +10,7 @@ import {
   type Response,
   type SerializableLruOptions,
   type Stats,
+  type InvalidationPush,
 } from './messages.js';
 
 // Distributive Omit so each member of the Request union keeps its own shape.
@@ -491,6 +492,48 @@ export function dispatchOp(namespace: string, payload: ExecPayload, context: Dis
   }
 }
 
+// Bulk ops broadcast a namespace-wide invalidate; single-key ops broadcast the
+// specific key. Reasoning in spec section 5.3.
+const BULK_BROADCAST_OPS = new Set(['clear', 'purgeStale', 'mSet', 'mDelete', 'load', 'max'] as const);
+
+function buildInvalidation(namespace: string, payload: ExecPayload, version: number): InvalidationPush | undefined {
+  if ((BULK_BROADCAST_OPS as Set<string>).has(payload.op)) {
+    return { source: SOURCE, push: 'l1:invalidate-namespace', namespace, version };
+  }
+  // Single-key mutating ops carry `key`. Read ops don't reach here because
+  // dispatchAndBroadcast checks the version-bump signal before invoking us.
+  const key = (payload as { key?: unknown }).key;
+  if (key === undefined || key === null) return undefined;
+  return { source: SOURCE, push: 'l1:invalidate', namespace, key, version };
+}
+
+function broadcastInvalidation(msg: InvalidationPush, exceptWorkerId?: number): void {
+  for (const worker of Object.values(cluster.workers ?? {})) {
+    if (!worker || !worker.isConnected()) continue;
+    if (worker.id === exceptWorkerId) continue;
+    try {
+      worker.send(msg);
+    } catch (err) {
+      debug(`l1 broadcast to worker ${worker.id} failed: %s`, err);
+    }
+  }
+}
+
+export function dispatchAndBroadcast(
+  namespace: string,
+  payload: ExecPayload,
+  context: DispatchContext = {},
+): { value: unknown; version: number } {
+  const before = getNamespaceVersion(namespace);
+  const value = dispatchOp(namespace, payload, context);
+  const after = getNamespaceVersion(namespace);
+  if (after !== before) {
+    const msg = buildInvalidation(namespace, payload, after);
+    if (msg) broadcastInvalidation(msg, context.workerId);
+  }
+  return { value, version: after };
+}
+
 export function handleRequest(request: Request, context: DispatchContext = {}): Response {
   if (typeof request !== 'object' || request === null) {
     return err(request, 'invalid request: not an object');
@@ -504,7 +547,7 @@ export function handleRequest(request: Request, context: DispatchContext = {}): 
     return err(request, 'invalid request: missing required fields');
   }
   try {
-    const value = dispatchOp(request.namespace, request, context);
+    const { value } = dispatchAndBroadcast(request.namespace, request, context);
     return ok(request, value, getNamespaceVersion(request.namespace));
   } catch (e) {
     return err(request, e);

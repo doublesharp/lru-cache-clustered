@@ -1253,3 +1253,116 @@ void test('init response value includes the current namespace version', async ()
     assert.equal(value.isNew, false);
   }
 });
+
+void test('dispatchAndBroadcast fans out single-key invalidation to other workers', async () => {
+  const cluster = (await import('node:cluster')).default;
+  const { dispatchAndBroadcast } = await import('../src/primary.ts');
+
+  const sent: Array<{ workerId: number; msg: unknown }> = [];
+  const makeStub = (id: number) => ({
+    id,
+    isConnected: () => true,
+    send: (msg: unknown) => {
+      sent.push({ workerId: id, msg });
+      return true;
+    },
+  });
+  const original = cluster.workers;
+  (cluster as unknown as { workers: Record<string, unknown> }).workers = {
+    '1': makeStub(1),
+    '2': makeStub(2),
+  };
+  try {
+    const result = dispatchAndBroadcast('broadcast-test', { op: 'set', key: 'k', value: 1 }, { workerId: 1 });
+    assert.equal(result.value, true);
+    assert.equal(typeof result.version, 'number');
+    // Worker 1 is the caller; only worker 2 receives the broadcast
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0].workerId, 2);
+    const msg = sent[0].msg as { push: string; namespace: string; key: unknown; version: number };
+    assert.equal(msg.push, 'l1:invalidate');
+    assert.equal(msg.namespace, 'broadcast-test');
+    assert.equal(msg.key, 'k');
+    assert.equal(msg.version, result.version);
+  } finally {
+    (cluster as unknown as { workers: Record<string, unknown> | undefined }).workers = original;
+  }
+});
+
+void test('dispatchAndBroadcast fans out namespace-wide invalidation for bulk ops', async () => {
+  const cluster = (await import('node:cluster')).default;
+  const { dispatchAndBroadcast } = await import('../src/primary.ts');
+
+  const sent: Array<unknown> = [];
+  const stub = {
+    id: 1,
+    isConnected: () => true,
+    send: (msg: unknown) => {
+      sent.push(msg);
+      return true;
+    },
+  };
+  const original = cluster.workers;
+  (cluster as unknown as { workers: Record<string, unknown> }).workers = { '1': stub };
+  try {
+    dispatchAndBroadcast('bulk-test', { op: 'mDelete', keys: ['a', 'b'] }, { workerId: 99 });
+    assert.equal(sent.length, 1);
+    const msg = sent[0] as { push: string };
+    assert.equal(msg.push, 'l1:invalidate-namespace');
+  } finally {
+    (cluster as unknown as { workers: Record<string, unknown> | undefined }).workers = original;
+  }
+});
+
+void test('dispatchAndBroadcast does not broadcast for non-mutating ops', async () => {
+  const cluster = (await import('node:cluster')).default;
+  const { dispatchAndBroadcast } = await import('../src/primary.ts');
+
+  const sent: Array<unknown> = [];
+  const stub = {
+    id: 1,
+    isConnected: () => true,
+    send: (msg: unknown) => {
+      sent.push(msg);
+      return true;
+    },
+  };
+  const original = cluster.workers;
+  (cluster as unknown as { workers: Record<string, unknown> }).workers = { '1': stub };
+  try {
+    dispatchAndBroadcast('readonly', { op: 'get', key: 'a' }, {});
+    assert.equal(sent.length, 0);
+  } finally {
+    (cluster as unknown as { workers: Record<string, unknown> | undefined }).workers = original;
+  }
+});
+
+void test('dispatchAndBroadcast skips disconnected workers', async () => {
+  const cluster = (await import('node:cluster')).default;
+  const { dispatchAndBroadcast } = await import('../src/primary.ts');
+
+  const sent: Array<unknown> = [];
+  const dead = {
+    id: 1,
+    isConnected: () => false,
+    send: () => {
+      throw new Error('should not send');
+    },
+  };
+  const live = {
+    id: 2,
+    isConnected: () => true,
+    send: (msg: unknown) => {
+      sent.push(msg);
+      return true;
+    },
+  };
+  const original = cluster.workers;
+  (cluster as unknown as { workers: Record<string, unknown> }).workers = { '1': dead, '2': live };
+  try {
+    dispatchAndBroadcast('mixed', { op: 'set', key: 'k', value: 1 }, { workerId: 99 });
+    assert.equal(sent.length, 1);
+  } finally {
+    (cluster as unknown as { workers: Record<string, unknown> | undefined }).workers = original;
+  }
+});

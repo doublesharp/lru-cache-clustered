@@ -34,6 +34,7 @@ export type MSetEntry<K extends {}, V extends {}> = [K, V] | [K, V, WriteOptions
 
 export interface FetchOptions extends WriteOptions {
   forceRefresh?: boolean;
+  bypassL1?: boolean;
 }
 
 export type LocalL1Options = {
@@ -514,7 +515,7 @@ export class LRUCacheForClustersAsPromised<K extends {} = string, V extends {} =
     let slot!: { promise: Promise<V> };
     const run = async (): Promise<V> => {
       if (!opts?.forceRefresh) {
-        const cached = await this.get(key);
+        const cached = await this.get(key, { bypassL1: opts?.bypassL1 });
         if (cached !== undefined) return cached;
       }
       let forceRefresh = opts?.forceRefresh === true;
@@ -530,14 +531,25 @@ export class LRUCacheForClustersAsPromised<K extends {} = string, V extends {} =
         if (claim.kind === 'leader') {
           try {
             const v = (await fetcher(key)) as V;
-            await this.#dispatchRequired<boolean>({
-              op: 'fetchStore',
-              key,
-              token: claim.token,
-              value: v,
-              ttl: opts?.ttl,
-              size: opts?.size,
-            });
+            const stored = await this.#dispatchWithMeta<boolean>(
+              {
+                op: 'fetchStore',
+                key,
+                token: claim.token,
+                value: v,
+                ttl: opts?.ttl,
+                size: opts?.size,
+              },
+              'reject',
+            );
+            // Populate the leader's L1 with the fresh value and the version
+            // returned by fetchStore. bypassL1 skips the populate so the caller
+            // sees the fresh L2 result without repopulating their L1.
+            if (this.#l1 && this.#l1Methods.fetch && !opts?.bypassL1) {
+              const enc = encodeL1KeyOrUndefined(key);
+              if (enc !== undefined) this.#l1.set(enc, v, stored.version);
+            }
+            if (this.#l1) this.#l1.advanceLatestSeen(stored.version);
             return v;
           } catch (error) {
             try {
@@ -553,7 +565,7 @@ export class LRUCacheForClustersAsPromised<K extends {} = string, V extends {} =
           }
         }
 
-        const observed = await this.peek(key);
+        const observed = await this.peek(key, { bypassL1: opts?.bypassL1 });
         if (observed === undefined) {
           forceRefresh = false;
           await new Promise((resolve) => setTimeout(resolve, FETCH_POLL_MS));

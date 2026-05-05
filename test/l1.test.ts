@@ -77,3 +77,50 @@ void test('worker-mode L1 reacts to invalidateLocal (proxy for the broadcast han
   c.invalidateLocal('a');
   assert.equal(c.localStats()?.size, 0);
 });
+
+void test('fetch leader populates own L1 after fetcher success', async () => {
+  const c = new LRUCacheForClustersAsPromised<string, number>({
+    namespace: 'l1-fetch',
+    max: 10,
+    localL1: { enabled: true, ttl: 1000 },
+  });
+  let calls = 0;
+  const v = await c.fetch('k', async () => {
+    calls += 1;
+    return 42;
+  });
+  assert.equal(v, 42);
+  // After fetch, L1 should hold the value
+  assert.equal(c.localStats()?.size, 1);
+  // Second fetch should hit L1 (no fetcher call)
+  const v2 = await c.fetch('k', async () => {
+    calls += 1;
+    return 999;
+  });
+  assert.equal(v2, 42);
+  assert.equal(calls, 1);
+});
+
+void test('fetch with bypassL1 forces a primary read but still single-flights', async () => {
+  const c = new LRUCacheForClustersAsPromised<string, number>({
+    namespace: 'l1-fetch-bypass',
+    max: 10,
+    localL1: { enabled: true, ttl: 1000 },
+  });
+  let calls = 0;
+  await c.fetch('k', async () => {
+    calls += 1;
+    return 1;
+  });
+  // bypass should still see the L2 value via the primary `get`
+  const v = await c.fetch(
+    'k',
+    async () => {
+      calls += 1;
+      return 2;
+    },
+    { bypassL1: true },
+  );
+  assert.equal(v, 1);
+  assert.equal(calls, 1); // L2 hit, no second fetcher call
+});

@@ -1,6 +1,13 @@
 import cluster from 'node:cluster';
 import { LRUCache } from 'lru-cache';
-import { caches, dispatchOp, getOrCreateCache, installClusterListener, type ExecPayload } from './primary.js';
+import {
+  caches,
+  dispatchAndBroadcast,
+  getOrCreateCache,
+  getNamespaceVersion,
+  installClusterListener,
+  type ExecPayload,
+} from './primary.js';
 import { getDefaultClient } from './worker.js';
 import { type SerializableLruOptions, type Stats } from './messages.js';
 import { LocalL1Cache, encodeL1Key, type L1Stats } from './l1.js';
@@ -19,6 +26,7 @@ type FetchClaimResult<T> = { kind: 'value'; value: T } | { kind: 'leader'; token
 export interface WriteOptions {
   ttl?: number;
   size?: number;
+  updateL1?: boolean;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type
@@ -103,6 +111,15 @@ function normalizeL1(
   };
 }
 
+function encodeL1KeyOrUndefined(key: unknown): string | undefined {
+  if (key === undefined || key === null) return undefined;
+  try {
+    return encodeL1Key(key);
+  } catch {
+    return undefined;
+  }
+}
+
 // K and V are constrained to non-nullish to mirror lru-cache@11's own signature
 // (`class LRUCache<K extends {}, V extends {}>`), since the primary enforces
 // non-nullish at runtime via requireNonNullish(). Without the constraint, a
@@ -121,7 +138,6 @@ export class LRUCacheForClustersAsPromised<K extends {} = string, V extends {} =
   // engages across instances and workers.
   readonly #inFlight = new Map<K, { promise: Promise<V> }>();
   readonly #l1?: LocalL1Cache<V & NonNullish>;
-  // eslint-disable-next-line no-unused-private-class-members
   readonly #l1Methods: { get: boolean; has: boolean; fetch: boolean; memoize: boolean };
   // eslint-disable-next-line no-unused-private-class-members
   readonly #l1CacheUndefined: boolean;
@@ -153,12 +169,20 @@ export class LRUCacheForClustersAsPromised<K extends {} = string, V extends {} =
 
     if (cluster.isPrimary) {
       getOrCreateCache(this.namespace, this.#lruOptions);
+      if (this.#l1) {
+        this.#l1.advanceLatestSeen(getNamespaceVersion(this.namespace));
+      }
       this.ready = Promise.resolve(undefined);
     } else if (!options.noInit) {
       // Swallow rejection so consumers can `await cache.ready` purely for
       // ordering without unhandled-rejection noise.
-      this.ready = this.#dispatch<unknown>({ op: 'init', options: this.#lruOptions }).then(
-        () => undefined,
+      this.ready = this.#dispatchWithMeta<{ namespace: string; isNew: boolean; max: number; version: number }>(
+        { op: 'init', options: this.#lruOptions },
+        'reject',
+      ).then(
+        (r) => {
+          if (this.#l1) this.#l1.advanceLatestSeen(r.value.version);
+        },
         () => undefined,
       );
     } else {
@@ -175,10 +199,11 @@ export class LRUCacheForClustersAsPromised<K extends {} = string, V extends {} =
       noInit: true,
     });
     if (cluster.isWorker) {
-      await instance.#dispatchRequired<unknown>({
-        op: 'init',
-        options: instance.#lruOptions,
-      });
+      const r = await instance.#dispatchWithMeta<{ namespace: string; isNew: boolean; max: number; version: number }>(
+        { op: 'init', options: instance.#lruOptions },
+        'reject',
+      );
+      if (instance.#l1) instance.#l1.advanceLatestSeen(r.value.version);
     }
     return instance;
   }
@@ -202,17 +227,37 @@ export class LRUCacheForClustersAsPromised<K extends {} = string, V extends {} =
   }
 
   // Per-method API:
-  get(key: K) {
-    return this.#dispatch<V | undefined>({ op: 'get', key });
+  async get(key: K, opts?: { bypassL1?: boolean }): Promise<V | undefined> {
+    const useL1 = this.#l1 && this.#l1Methods.get && !opts?.bypassL1;
+    if (useL1) {
+      const enc = encodeL1KeyOrUndefined(key);
+      if (enc !== undefined) {
+        const hit = this.#l1.get(enc);
+        if (hit !== undefined) return hit;
+      }
+    }
+    const r = await this.#dispatchWithMeta<V | undefined>({ op: 'get', key }, this.failsafe);
+    if (useL1 && r.value !== undefined) {
+      const enc = encodeL1KeyOrUndefined(key);
+      if (enc !== undefined) this.#l1.set(enc, r.value, r.version);
+    }
+    return r.value;
   }
-  set(key: K, value: V, opts?: WriteOptions) {
-    return this.#dispatch<boolean>({
-      op: 'set',
-      key,
-      value,
-      ttl: opts?.ttl,
-      size: opts?.size,
-    });
+  async set(key: K, value: V, opts?: WriteOptions): Promise<boolean> {
+    if (this.#l1) {
+      const enc = encodeL1KeyOrUndefined(key);
+      if (enc !== undefined) this.#l1.delete(enc);
+    }
+    const r = await this.#dispatchWithMeta<boolean>(
+      { op: 'set', key, value, ttl: opts?.ttl, size: opts?.size },
+      this.failsafe,
+    );
+    if (this.#l1) this.#l1.advanceLatestSeen(r.version);
+    if (this.#l1 && opts?.updateL1 && r.value === true) {
+      const enc = encodeL1KeyOrUndefined(key);
+      if (enc !== undefined) this.#l1.set(enc, value, r.version);
+    }
+    return r.value;
   }
   delete(key: K) {
     return this.#dispatch<boolean>({ op: 'delete', key });
@@ -440,28 +485,30 @@ export class LRUCacheForClustersAsPromised<K extends {} = string, V extends {} =
   }
 
   #dispatch<T>(payload: ExecPayload): Promise<T> {
-    return this.#dispatchWithFailsafe(payload, this.failsafe);
+    return this.#dispatchWithMeta<T>(payload, this.failsafe).then((r) => r.value);
   }
 
   #dispatchRequired<T>(payload: ExecPayload): Promise<T> {
-    return this.#dispatchWithFailsafe(payload, 'reject');
+    return this.#dispatchWithMeta<T>(payload, 'reject').then((r) => r.value);
   }
 
-  #dispatchWithFailsafe<T>(payload: ExecPayload, failsafe: 'resolve' | 'reject'): Promise<T> {
+  async #dispatchWithMeta<T>(
+    payload: ExecPayload,
+    failsafe: 'resolve' | 'reject',
+  ): Promise<{ value: T; version: number }> {
     const request = { ...payload, cacheOptions: this.#lruOptions } as ExecPayload;
     if (cluster.isPrimary) {
       try {
-        return Promise.resolve(dispatchOp(this.namespace, request) as T);
+        const r = dispatchAndBroadcast(this.namespace, request);
+        return { value: r.value as T, version: r.version };
       } catch (e) {
-        return Promise.reject(e instanceof Error ? e : new Error(String(e)));
+        // Primary-mode errors always reject; failsafe only applies to IPC
+        // timeouts in worker mode.
+        throw e instanceof Error ? e : new Error(String(e));
       }
     }
-    return getDefaultClient().sendToPrimary<T>(
-      {
-        namespace: this.namespace,
-        timeout: this.timeout,
-        failsafe,
-      },
+    return getDefaultClient().sendToPrimaryWithMeta<T>(
+      { namespace: this.namespace, timeout: this.timeout, failsafe },
       request,
     );
   }

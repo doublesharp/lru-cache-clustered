@@ -687,3 +687,64 @@ void test('invalidateLocal is a no-op when L1 disabled', () => {
   const c = new LRUCacheForClustersAsPromised({ namespace: 'l1-noop-2' });
   c.invalidateLocal('nope'); // does not throw
 });
+
+void test('get with L1 enabled hits L1 on second read in primary mode', async () => {
+  const c = new LRUCacheForClustersAsPromised<string, number>({
+    namespace: 'l1-get',
+    max: 10,
+    localL1: { enabled: true, ttl: 1000 },
+  });
+  await c.set('a', 1);
+  // First read: L1 miss, populates from primary
+  const v1 = await c.get('a');
+  assert.equal(v1, 1);
+  const s1 = c.localStats();
+  assert.equal(s1?.hits, 0);
+  assert.equal(s1?.misses, 1);
+
+  // Second read: L1 hit
+  const v2 = await c.get('a');
+  assert.equal(v2, 1);
+  const s2 = c.localStats();
+  assert.equal(s2?.hits, 1);
+  assert.equal(s2?.misses, 1);
+  assert.equal(s2?.ipcAvoided, 1);
+});
+
+void test('get with bypassL1: true skips L1 entirely', async () => {
+  const c = new LRUCacheForClustersAsPromised<string, number>({
+    namespace: 'l1-bypass',
+    max: 10,
+    localL1: { enabled: true, ttl: 1000 },
+  });
+  await c.set('a', 1);
+  await c.get('a'); // populate
+  const beforeHits = c.localStats()?.hits;
+  await c.get('a', { bypassL1: true });
+  // Bypass should NOT increment L1 hits
+  assert.equal(c.localStats()?.hits, beforeHits);
+});
+
+void test('get returns undefined for missing key without populating L1', async () => {
+  const c = new LRUCacheForClustersAsPromised<string, number>({
+    namespace: 'l1-miss',
+    max: 10,
+    localL1: { enabled: true, ttl: 1000 },
+  });
+  assert.equal(await c.get('nope'), undefined);
+  assert.equal(c.localStats()?.size, 0); // no negative caching in v1
+});
+
+void test('set self-invalidates the calling worker L1 entry', async () => {
+  const c = new LRUCacheForClustersAsPromised<string, number>({
+    namespace: 'l1-self-inv',
+    max: 10,
+    localL1: { enabled: true, ttl: 1000 },
+  });
+  await c.set('a', 1);
+  await c.get('a'); // populates L1
+  assert.equal(c.localStats()?.size, 1);
+  await c.set('a', 2); // self-invalidates own L1 first
+  // Next read repopulates with fresh value and version
+  assert.equal(await c.get('a'), 2);
+});

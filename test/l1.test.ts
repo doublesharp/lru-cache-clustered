@@ -1,0 +1,62 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { LocalL1Cache, encodeL1Key } from '../src/l1.ts';
+
+void test('encodeL1Key handles primitives and objects', () => {
+  assert.equal(encodeL1Key('a'), 's:a');
+  assert.equal(encodeL1Key(42), 'n:42');
+  // Object keys serialize to JSON
+  assert.equal(encodeL1Key({ x: 1 }), 'o:{"x":1}');
+  // Symbol is rejected
+  const sym = Symbol('s');
+  assert.throws(() => encodeL1Key(sym), /symbol/i);
+});
+
+void test('LocalL1Cache get returns undefined for missing key, hit for matching version', () => {
+  const l1 = new LocalL1Cache({ max: 10, ttl: 1000 });
+  assert.equal(l1.get('s:a'), undefined);
+  l1.set('s:a', 'v', 1);
+  assert.equal(l1.get('s:a'), 'v');
+  // After advancing latest-seen past the entry's version, the read drops it
+  l1.advanceLatestSeen(2);
+  assert.equal(l1.get('s:a'), undefined);
+});
+
+void test('LocalL1Cache deletes a single entry', () => {
+  const l1 = new LocalL1Cache({ max: 10, ttl: 1000 });
+  l1.set('s:a', 'v', 1);
+  l1.set('s:b', 'w', 1);
+  l1.delete('s:a');
+  assert.equal(l1.get('s:a'), undefined);
+  assert.equal(l1.get('s:b'), 'w');
+});
+
+void test('LocalL1Cache clear removes everything', () => {
+  const l1 = new LocalL1Cache({ max: 10, ttl: 1000 });
+  l1.set('s:a', 'v', 1);
+  l1.set('s:b', 'w', 1);
+  l1.clear();
+  assert.equal(l1.get('s:a'), undefined);
+  assert.equal(l1.get('s:b'), undefined);
+});
+
+void test('LocalL1Cache stats track hits, misses, sets, invalidations', () => {
+  const l1 = new LocalL1Cache({ max: 10, ttl: 1000 });
+  l1.set('s:a', 'v', 1);
+  l1.get('s:a'); // hit
+  l1.get('s:b'); // miss
+  l1.delete('s:a'); // invalidation +1
+  const s = l1.stats();
+  assert.equal(s.hits, 1);
+  assert.equal(s.misses, 1);
+  assert.equal(s.sets, 1);
+  assert.equal(s.invalidations, 1);
+});
+
+void test('LocalL1Cache TTL expires entries', async () => {
+  const l1 = new LocalL1Cache({ max: 10, ttl: 50 });
+  l1.set('s:a', 'v', 1);
+  assert.equal(l1.get('s:a'), 'v');
+  await new Promise((r) => setTimeout(r, 80));
+  assert.equal(l1.get('s:a'), undefined);
+});

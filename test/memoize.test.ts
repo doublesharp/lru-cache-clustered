@@ -209,3 +209,23 @@ void test('memoize: separate cache instances have independent dedup tables', asy
   assert.equal(callsA, 1);
   assert.equal(callsB, 1);
 });
+
+void test('memoize honors L1 (second call hits L1 in primary mode)', async () => {
+  const cache = new LRUCacheForClustersAsPromised<string, number>({
+    namespace: 'memo-l1',
+    max: 10,
+    localL1: { enabled: true, experimental: true, ttl: 1000 },
+  });
+  let calls = 0;
+  const fn = memoize(
+    cache,
+    async (x: number) => {
+      calls += 1;
+      return x * 2;
+    },
+    (x) => `k:${x}`,
+  );
+  await fn(3); // miss + fetcher
+  await fn(3); // L1 hit
+  assert.equal(calls, 1);
+});

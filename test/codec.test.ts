@@ -272,3 +272,21 @@ void test('wrap: exposes underlying cache via .cache for escape hatches', async 
   await inner.load(dump);
   assert.deepEqual(await c.get('k'), { hello: 'world' });
 });
+
+void test('wrap() forwards through L1', async () => {
+  const cache = new LRUCacheForClustersAsPromised<string, Buffer>({
+    namespace: 'codec-l1',
+    max: 10,
+    localL1: { enabled: true, experimental: true, ttl: 1000 },
+  });
+  const codec = {
+    encode: (v: { x: number }) => Buffer.from(JSON.stringify(v)),
+    decode: (b: Buffer) => JSON.parse(b.toString()) as { x: number },
+  };
+  const wrapped = wrap(cache, codec);
+  await wrapped.set('a', { x: 1 });
+  await wrapped.get('a'); // populate
+  const before = cache.localStats()?.hits ?? 0;
+  await wrapped.get('a');
+  assert.equal(cache.localStats()?.hits, before + 1);
+});

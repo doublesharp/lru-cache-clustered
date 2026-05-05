@@ -259,28 +259,76 @@ export class LRUCacheForClustersAsPromised<K extends {} = string, V extends {} =
     }
     return r.value;
   }
-  delete(key: K) {
-    return this.#dispatch<boolean>({ op: 'delete', key });
+  async delete(key: K): Promise<boolean> {
+    if (this.#l1) {
+      const enc = encodeL1KeyOrUndefined(key);
+      if (enc !== undefined) this.#l1.delete(enc);
+    }
+    const r = await this.#dispatchWithMeta<boolean>({ op: 'delete', key }, this.failsafe);
+    if (this.#l1) this.#l1.advanceLatestSeen(r.version);
+    return r.value;
   }
-  has(key: K) {
-    return this.#dispatch<boolean>({ op: 'has', key });
+  async has(key: K, opts?: { bypassL1?: boolean }): Promise<boolean> {
+    const useL1 = this.#l1 && this.#l1Methods.has && !opts?.bypassL1;
+    if (useL1) {
+      const enc = encodeL1KeyOrUndefined(key);
+      if (enc !== undefined) {
+        const hit = this.#l1.get(enc);
+        if (hit !== undefined) return true;
+      }
+    }
+    const r = await this.#dispatchWithMeta<boolean>({ op: 'has', key }, this.failsafe);
+    return r.value;
   }
-  peek(key: K) {
-    return this.#dispatch<V | undefined>({ op: 'peek', key });
+  async peek(key: K, opts?: { bypassL1?: boolean }): Promise<V | undefined> {
+    const useL1 = this.#l1 && !opts?.bypassL1;
+    if (useL1) {
+      const enc = encodeL1KeyOrUndefined(key);
+      if (enc !== undefined) {
+        const hit = this.#l1.get(enc);
+        if (hit !== undefined) return hit;
+      }
+    }
+    const r = await this.#dispatchWithMeta<V | undefined>({ op: 'peek', key }, this.failsafe);
+    if (useL1 && r.value !== undefined) {
+      const enc = encodeL1KeyOrUndefined(key);
+      if (enc !== undefined) this.#l1.set(enc, r.value, r.version);
+    }
+    return r.value;
   }
-  clear() {
-    return this.#dispatch<void>({ op: 'clear' });
+  async clear(): Promise<void> {
+    this.#l1?.clear();
+    const r = await this.#dispatchWithMeta<void>({ op: 'clear' }, this.failsafe);
+    if (this.#l1) this.#l1.advanceLatestSeen(r.version);
+    return r.value;
   }
-  purgeStale() {
-    return this.#dispatch<boolean>({ op: 'purgeStale' });
+  async purgeStale(): Promise<boolean> {
+    this.#l1?.clear();
+    const r = await this.#dispatchWithMeta<boolean>({ op: 'purgeStale' }, this.failsafe);
+    if (this.#l1) this.#l1.advanceLatestSeen(r.version);
+    return r.value;
   }
 
   async mGet(keys: K[]): Promise<Map<K, V | undefined>> {
-    const pairs = await this.#dispatch<Array<[K, V | undefined]> | undefined>({
-      op: 'mGet',
-      keys: keys,
-    });
     const out = new Map<K, V | undefined>();
+    const useL1 = this.#l1 && this.#l1Methods.get;
+    const remainingKeys: K[] = [];
+    if (useL1) {
+      for (const k of keys) {
+        const enc = encodeL1KeyOrUndefined(k);
+        const hit = enc !== undefined ? (this.#l1.get(enc)) : undefined;
+        if (hit !== undefined) out.set(k, hit);
+        else remainingKeys.push(k);
+      }
+    } else {
+      remainingKeys.push(...keys);
+    }
+    if (remainingKeys.length === 0) return out;
+
+    const r = await this.#dispatchWithMeta<Array<[K, V | undefined]> | undefined>(
+      { op: 'mGet', keys: remainingKeys },
+      this.failsafe,
+    );
     // Default cluster IPC uses JSON serialization, which rewrites
     // `undefined` inside arrays to `null`. Cache values are non-nullish, so
     // a null on this wire can only mean "the primary returned undefined for
@@ -288,23 +336,35 @@ export class LRUCacheForClustersAsPromised<K extends {} = string, V extends {} =
     // holds in both primary and worker mode. The `?? []` covers the
     // failsafe='resolve' + IPC timeout case where dispatch resolves to
     // undefined; matches the previous `new Map(undefined)` empty-Map result.
-    for (const [k, v] of pairs ?? []) out.set(k, v === null ? undefined : v);
+    for (const [k, v] of r.value ?? []) {
+      const value = v === null ? undefined : v;
+      out.set(k, value);
+      if (useL1 && value !== undefined) {
+        const enc = encodeL1KeyOrUndefined(k);
+        if (enc !== undefined) this.#l1.set(enc, value, r.version);
+      }
+    }
     return out;
   }
-  mSet(entries: Iterable<MSetEntry<K, V>>, opts?: WriteOptions) {
-    return this.#dispatch<void>({
-      op: 'mSet',
-      entries: [...entries].map((entry) =>
-        entry.length === 3
-          ? ([entry[0], entry[1], entry[2]] as [unknown, unknown, WriteOptions])
-          : ([entry[0], entry[1]] as [unknown, unknown]),
-      ),
-      ttl: opts?.ttl,
-      size: opts?.size,
-    });
+  async mSet(entries: Iterable<MSetEntry<K, V>>, opts?: WriteOptions): Promise<void> {
+    this.#l1?.clear();
+    const arr = [...entries].map((entry) =>
+      entry.length === 3
+        ? ([entry[0], entry[1], entry[2]] as [unknown, unknown, WriteOptions])
+        : ([entry[0], entry[1]] as [unknown, unknown]),
+    );
+    const r = await this.#dispatchWithMeta<void>(
+      { op: 'mSet', entries: arr, ttl: opts?.ttl, size: opts?.size },
+      this.failsafe,
+    );
+    if (this.#l1) this.#l1.advanceLatestSeen(r.version);
+    return r.value;
   }
-  mDelete(keys: K[]) {
-    return this.#dispatch<void>({ op: 'mDelete', keys: keys });
+  async mDelete(keys: K[]): Promise<void> {
+    this.#l1?.clear();
+    const r = await this.#dispatchWithMeta<void>({ op: 'mDelete', keys }, this.failsafe);
+    if (this.#l1) this.#l1.advanceLatestSeen(r.version);
+    return r.value;
   }
 
   keys() {
@@ -323,11 +383,29 @@ export class LRUCacheForClustersAsPromised<K extends {} = string, V extends {} =
     return this.#dispatch<number>({ op: 'size' });
   }
 
-  incr(key: K, amount?: number, opts?: WriteOptions) {
-    return this.#dispatch<number>({ op: 'incr', key, amount, ttl: opts?.ttl, size: opts?.size });
+  async incr(key: K, amount?: number, opts?: WriteOptions): Promise<number> {
+    if (this.#l1) {
+      const enc = encodeL1KeyOrUndefined(key);
+      if (enc !== undefined) this.#l1.delete(enc);
+    }
+    const r = await this.#dispatchWithMeta<number>(
+      { op: 'incr', key, amount, ttl: opts?.ttl, size: opts?.size },
+      this.failsafe,
+    );
+    if (this.#l1) this.#l1.advanceLatestSeen(r.version);
+    return r.value;
   }
-  decr(key: K, amount?: number, opts?: WriteOptions) {
-    return this.#dispatch<number>({ op: 'decr', key, amount, ttl: opts?.ttl, size: opts?.size });
+  async decr(key: K, amount?: number, opts?: WriteOptions): Promise<number> {
+    if (this.#l1) {
+      const enc = encodeL1KeyOrUndefined(key);
+      if (enc !== undefined) this.#l1.delete(enc);
+    }
+    const r = await this.#dispatchWithMeta<number>(
+      { op: 'decr', key, amount, ttl: opts?.ttl, size: opts?.size },
+      this.failsafe,
+    );
+    if (this.#l1) this.#l1.advanceLatestSeen(r.version);
+    return r.value;
   }
 
   async allowStale(value?: boolean) {
@@ -357,20 +435,23 @@ export class LRUCacheForClustersAsPromised<K extends {} = string, V extends {} =
     const ttl = await this.#dispatch<number | null>({ op: 'getRemainingTTL', key });
     return ttl === null ? Infinity : ttl;
   }
-  setIfAbsent(key: K, value: V, opts?: WriteOptions) {
-    return this.#dispatch<boolean>({
-      op: 'setIfAbsent',
-      key,
-      value,
-      ttl: opts?.ttl,
-      size: opts?.size,
-    });
+  async setIfAbsent(key: K, value: V, opts?: WriteOptions): Promise<boolean> {
+    if (this.#l1) {
+      const enc = encodeL1KeyOrUndefined(key);
+      if (enc !== undefined) this.#l1.delete(enc);
+    }
+    const r = await this.#dispatchWithMeta<boolean>(
+      { op: 'setIfAbsent', key, value, ttl: opts?.ttl, size: opts?.size },
+      this.failsafe,
+    );
+    if (this.#l1) this.#l1.advanceLatestSeen(r.version);
+    return r.value;
   }
-  load(entries: Array<[K, LRUCache.Entry<V>]>) {
-    return this.#dispatch<void>({
-      op: 'load',
-      entries: entries,
-    });
+  async load(entries: Array<[K, LRUCache.Entry<V>]>): Promise<void> {
+    this.#l1?.clear();
+    const r = await this.#dispatchWithMeta<void>({ op: 'load', entries }, this.failsafe);
+    if (this.#l1) this.#l1.advanceLatestSeen(r.version);
+    return r.value;
   }
   destroy() {
     this.#inFlight.clear();

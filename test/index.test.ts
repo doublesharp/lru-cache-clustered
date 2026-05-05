@@ -748,3 +748,121 @@ void test('set self-invalidates the calling worker L1 entry', async () => {
   // Next read repopulates with fresh value and version
   assert.equal(await c.get('a'), 2);
 });
+
+void test('has with L1 enabled hits L1 after a populating get', async () => {
+  const c = new LRUCacheForClustersAsPromised<string, number>({
+    namespace: 'l1-has',
+    max: 10,
+    localL1: { enabled: true, ttl: 1000 },
+  });
+  await c.set('a', 1);
+  await c.get('a'); // populate
+  const before = c.localStats()?.hits ?? 0;
+  const r = await c.has('a');
+  assert.equal(r, true);
+  assert.equal(c.localStats()?.hits, before + 1);
+});
+
+void test('peek with L1 enabled hits L1 (peek is a read)', async () => {
+  const c = new LRUCacheForClustersAsPromised<string, number>({
+    namespace: 'l1-peek',
+    max: 10,
+    localL1: { enabled: true, ttl: 1000 },
+  });
+  await c.set('a', 1);
+  await c.get('a'); // populate
+  const before = c.localStats()?.hits ?? 0;
+  const v = await c.peek('a');
+  assert.equal(v, 1);
+  assert.equal(c.localStats()?.hits, before + 1);
+});
+
+void test('delete self-invalidates and advances latestSeen', async () => {
+  const c = new LRUCacheForClustersAsPromised<string, number>({
+    namespace: 'l1-del',
+    max: 10,
+    localL1: { enabled: true, ttl: 1000 },
+  });
+  await c.set('a', 1);
+  await c.get('a');
+  await c.delete('a');
+  assert.equal(await c.get('a'), undefined);
+});
+
+void test('clear wipes the local L1 too', async () => {
+  const c = new LRUCacheForClustersAsPromised<string, number>({
+    namespace: 'l1-clear',
+    max: 10,
+    localL1: { enabled: true, ttl: 1000 },
+  });
+  await c.set('a', 1);
+  await c.set('b', 2);
+  await c.get('a');
+  await c.get('b');
+  assert.equal(c.localStats()?.size, 2);
+  await c.clear();
+  assert.equal(c.localStats()?.size, 0);
+});
+
+void test('setIfAbsent self-invalidates regardless of outcome', async () => {
+  const c = new LRUCacheForClustersAsPromised<string, number>({
+    namespace: 'l1-sia',
+    max: 10,
+    localL1: { enabled: true, ttl: 1000 },
+  });
+  await c.set('a', 1);
+  await c.get('a'); // populate
+  // setIfAbsent on an existing key returns false; should still invalidate own L1
+  const r = await c.setIfAbsent('a', 99);
+  assert.equal(r, false);
+  // Next get bypassing L1 confirms L2 still 1
+  const fresh = await c.get('a', { bypassL1: true });
+  assert.equal(fresh, 1);
+});
+
+void test('mGet with L1 hits each present key in L1 after populate', async () => {
+  const c = new LRUCacheForClustersAsPromised<string, number>({
+    namespace: 'l1-mget',
+    max: 10,
+    localL1: { enabled: true, ttl: 1000 },
+  });
+  await c.set('a', 1);
+  await c.set('b', 2);
+  await c.mGet(['a', 'b']); // populate both
+  const before = c.localStats()?.hits ?? 0;
+  const r = await c.mGet(['a', 'b']);
+  assert.equal(r.get('a'), 1);
+  assert.equal(r.get('b'), 2);
+  // Both should hit L1
+  assert.equal(c.localStats()?.hits, before + 2);
+});
+
+void test('mSet bulk-clears local L1', async () => {
+  const c = new LRUCacheForClustersAsPromised<string, number>({
+    namespace: 'l1-mset',
+    max: 10,
+    localL1: { enabled: true, ttl: 1000 },
+  });
+  await c.set('a', 1);
+  await c.get('a'); // populate
+  assert.equal(c.localStats()?.size, 1);
+  await c.mSet([
+    ['b', 2],
+    ['c', 3],
+  ]);
+  assert.equal(c.localStats()?.size, 0);
+});
+
+void test('incr self-invalidates own L1 entry on the calling worker', async () => {
+  const c = new LRUCacheForClustersAsPromised<string, number>({
+    namespace: 'l1-incr',
+    max: 10,
+    localL1: { enabled: true, ttl: 1000 },
+  });
+  await c.set('count', 5);
+  await c.get('count'); // populate L1 with stale value
+  await c.incr('count');
+  // Next get must repopulate from primary (the L1 entry was invalidated)
+  const v = await c.get('count');
+  assert.equal(v, 6);
+});

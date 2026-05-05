@@ -1,4 +1,5 @@
 import cluster from 'node:cluster';
+import { EventEmitter } from 'node:events';
 import { LRUCache } from 'lru-cache';
 import {
   caches,
@@ -138,6 +139,7 @@ export class LRUCacheForClustersAsPromised<K extends {} = string, V extends {} =
   // same instance piggyback locally before the primary-side single-flight lock
   // engages across instances and workers.
   readonly #inFlight = new Map<K, { promise: Promise<V> }>();
+  readonly #emitter = new EventEmitter();
   readonly #l1?: LocalL1Cache<V & NonNullish>;
   readonly #l1Methods: { get: boolean; has: boolean; fetch: boolean; memoize: boolean };
   // eslint-disable-next-line no-unused-private-class-members
@@ -166,6 +168,9 @@ export class LRUCacheForClustersAsPromised<K extends {} = string, V extends {} =
         ttl: l1Config.ttl,
         updateAgeOnGet: l1Config.updateAgeOnGet,
         allowStale: l1Config.allowStale,
+        emit: (event, payload) => {
+          this.#emitter.emit(`l1:${event}`, { namespace: this.namespace, ...payload });
+        },
       });
     }
 
@@ -479,6 +484,21 @@ export class LRUCacheForClustersAsPromised<K extends {} = string, V extends {} =
     return this.#l1?.stats();
   }
 
+  on(event: string, listener: (...args: unknown[]) => void): this {
+    this.#emitter.on(event, listener);
+    return this;
+  }
+
+  off(event: string, listener: (...args: unknown[]) => void): this {
+    this.#emitter.off(event, listener);
+    return this;
+  }
+
+  once(event: string, listener: (...args: unknown[]) => void): this {
+    this.#emitter.once(event, listener);
+    return this;
+  }
+
   clearLocal(): void {
     this.#l1?.clear();
   }
@@ -633,6 +653,13 @@ export class LRUCacheForClustersAsPromised<K extends {} = string, V extends {} =
     if (!this.#l1 || cluster.isPrimary) return;
     this.#unsubscribeL1 = getDefaultClient().subscribeInvalidations(this.namespace, (msg) => {
       this.#l1!.advanceLatestSeen(msg.version);
+      // Emit broadcast-reason event before the L1 mutation so listeners can
+      // distinguish broadcast-driven invalidations from local-write ones.
+      this.#emitter.emit('l1:invalidate', {
+        namespace: this.namespace,
+        key: msg.push === 'l1:invalidate' ? msg.key : undefined,
+        reason: 'broadcast',
+      });
       if (msg.push === 'l1:invalidate') {
         try {
           // eslint-disable-next-line @typescript-eslint/no-empty-object-type

@@ -17,12 +17,23 @@ export type L1Envelope<V> = {
   version: number;
 };
 
+export type L1EmitEvent = 'hit' | 'miss' | 'set' | 'invalidate' | 'evict' | 'stale-hit';
+
+export type L1EmitPayload = {
+  key?: string; // encoded key, may be omitted for namespace-wide events
+  version?: number;
+  reason?: string;
+};
+
+export type L1EmitFn = (event: L1EmitEvent, payload: L1EmitPayload) => void;
+
 export type L1ConstructorOptions = {
   max?: number;
   maxSize?: number;
   ttl?: number;
   updateAgeOnGet?: boolean;
   allowStale?: boolean;
+  emit?: L1EmitFn; // optional; defaults to no-op
 };
 
 // Encode arbitrary cache keys into a string the L1 LRUCache can index by.
@@ -71,8 +82,10 @@ export class LocalL1Cache<V extends {} = {}> {
   readonly #cache: LRUCache<string, L1Envelope<V>>;
   #latestSeen = 0;
   readonly #stats = FRESH_STATS();
+  readonly #emit: L1EmitFn;
 
   constructor(opts: L1ConstructorOptions) {
+    this.#emit = opts.emit ?? (() => undefined);
     const lruOpts = {
       max: opts.max ?? 1000,
       ttl: opts.ttl,
@@ -83,8 +96,11 @@ export class LocalL1Cache<V extends {} = {}> {
       // expose it in the public LocalL1Options. If a caller passes maxSize,
       // we use a 1-per-entry calculation as a placeholder.
       ...(opts.maxSize !== undefined ? { sizeCalculation: () => 1 } : {}),
-      dispose: (_value: L1Envelope<V>, _key: string, reason: LRUCache.DisposeReason) => {
-        if (reason === 'evict') this.#stats.evictions += 1;
+      dispose: (_value: L1Envelope<V>, key: string, reason: LRUCache.DisposeReason) => {
+        if (reason === 'evict') {
+          this.#stats.evictions += 1;
+          this.#emit('evict', { key, reason: 'lru' });
+        }
       },
     } as ConstructorParameters<typeof LRUCache<string, L1Envelope<V>>>[0];
     this.#cache = new LRUCache(lruOpts);
@@ -94,16 +110,21 @@ export class LocalL1Cache<V extends {} = {}> {
     const entry = this.#cache.get(encodedKey);
     if (!entry) {
       this.#stats.misses += 1;
+      this.#emit('miss', { key: encodedKey });
       return undefined;
     }
     if (entry.version < this.#latestSeen) {
       // Stamped before the latest invalidation; drop it.
       this.#cache.delete(encodedKey);
       this.#stats.misses += 1;
+      this.#stats.staleHits += 1;
+      this.#emit('stale-hit', { key: encodedKey });
+      this.#emit('miss', { key: encodedKey });
       return undefined;
     }
     this.#stats.hits += 1;
     this.#stats.ipcAvoided += 1;
+    this.#emit('hit', { key: encodedKey });
     return entry.value;
   }
 
@@ -114,17 +135,20 @@ export class LocalL1Cache<V extends {} = {}> {
     }
     this.#cache.set(encodedKey, { value, version });
     this.#stats.sets += 1;
+    this.#emit('set', { key: encodedKey, version });
   }
 
   delete(encodedKey: string): void {
     if (this.#cache.delete(encodedKey)) {
       this.#stats.invalidations += 1;
+      this.#emit('invalidate', { key: encodedKey, reason: 'self' });
     }
   }
 
   clear(): void {
     if (this.#cache.size > 0) this.#stats.invalidations += 1;
     this.#cache.clear();
+    this.#emit('invalidate', { reason: 'clear' });
   }
 
   advanceLatestSeen(version: number): void {

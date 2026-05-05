@@ -909,3 +909,51 @@ void test('withoutLocal() is idempotent', async () => {
   // The second call returns the same wrapper as the first.
   assert.equal(a, b);
 });
+
+void test('l1:hit and l1:miss events fire', async () => {
+  const c = new LRUCacheForClustersAsPromised<string, number>({
+    namespace: 'l1-events',
+    max: 10,
+    localL1: { enabled: true, ttl: 1000 },
+  });
+  const events: Array<{ name: string; payload: unknown }> = [];
+  c.on('l1:hit', (p) => events.push({ name: 'l1:hit', payload: p }));
+  c.on('l1:miss', (p) => events.push({ name: 'l1:miss', payload: p }));
+  await c.set('a', 1);
+  await c.get('a'); // miss + populate
+  await c.get('a'); // hit
+  const names = events.map((e) => e.name);
+  assert.ok(names.includes('l1:miss'));
+  assert.ok(names.includes('l1:hit'));
+});
+
+void test('l1:invalidate event fires on set self-invalidate', async () => {
+  const c = new LRUCacheForClustersAsPromised<string, number>({
+    namespace: 'l1-inv-evt',
+    max: 10,
+    localL1: { enabled: true, ttl: 1000 },
+  });
+  await c.set('a', 1);
+  await c.get('a');
+  const events: unknown[] = [];
+  c.on('l1:invalidate', (p) => events.push(p));
+  await c.set('a', 2);
+  assert.ok(events.length >= 1);
+});
+
+void test('off() removes a listener', () => {
+  const c = new LRUCacheForClustersAsPromised<string, number>({
+    namespace: 'l1-off-evt',
+    max: 10,
+    localL1: { enabled: true, ttl: 1000 },
+  });
+  let count = 0;
+  const handler = () => {
+    count += 1;
+  };
+  c.on('l1:miss', handler);
+  c.off('l1:miss', handler);
+  // Trigger a miss
+  void c.get('nope').catch(() => {});
+  assert.equal(count, 0);
+});

@@ -34,6 +34,7 @@
   },
   "packageManager": "pnpm@10.33.2",
   "scripts": {
+    "bench": "node --import tsx bench/l1-vs-no-l1.ts",
     "build": "tsup && tsc -p tsconfig.build.json && cp dist/index.d.ts dist/index.d.cts",
     "prepare:publish": "pnpm build && node scripts/prepare-publish.mjs",
     "example:users": "node --import tsx examples/clustered-users-server.ts",

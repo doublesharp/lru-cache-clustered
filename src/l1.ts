@@ -12,22 +12,22 @@ export type L1Stats = {
   ipcAvoided: number;
 };
 
-export type L1Envelope<V> = {
+type L1Envelope<V> = {
   value: V;
   version: number;
 };
 
-export type L1EmitEvent = 'hit' | 'miss' | 'set' | 'invalidate' | 'evict' | 'stale-hit';
+type L1EmitEvent = 'hit' | 'miss' | 'set' | 'invalidate' | 'evict' | 'stale-hit';
 
-export type L1EmitPayload = {
+type L1EmitPayload = {
   key?: string; // encoded key, may be omitted for namespace-wide events
   version?: number;
   reason?: string;
 };
 
-export type L1EmitFn = (event: L1EmitEvent, payload: L1EmitPayload) => void;
+type L1EmitFn = (event: L1EmitEvent, payload: L1EmitPayload) => void;
 
-export type L1ConstructorOptions = {
+type L1ConstructorOptions = {
   max?: number;
   maxSize?: number;
   ttl?: number;

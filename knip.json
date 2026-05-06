@@ -1,7 +1,7 @@
 {
   "$schema": "https://unpkg.com/knip@6/schema.json",
-  "entry": ["scripts/**/*.mjs", "test/**/*.test.ts"],
-  "project": ["examples/**/*.ts", "scripts/**/*.mjs", "src/**/*.ts", "test/**/*.ts"],
+  "entry": ["bench/**/*.ts", "examples/**/*.ts", "scripts/**/*.mjs", "test/**/*.test.ts"],
+  "project": ["bench/**/*.ts", "examples/**/*.ts", "scripts/**/*.mjs", "src/**/*.ts", "test/**/*.ts"],
   "rules": {
     "duplicates": "off"
   }

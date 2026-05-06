@@ -36,11 +36,24 @@ type L1ConstructorOptions = {
   emit?: L1EmitFn; // optional; defaults to no-op
 };
 
+const objectKeyIds = new WeakMap<object, number>();
+let nextObjectKeyId = 0;
+
+function objectKeyId(key: object): number {
+  let id = objectKeyIds.get(key);
+  if (id === undefined) {
+    id = ++nextObjectKeyId;
+    objectKeyIds.set(key, id);
+  }
+  return id;
+}
+
 // Encode arbitrary cache keys into a string the L1 LRUCache can index by.
 // Primitives use a typed prefix so 1 (number) and "1" (string) do not collide.
-// Objects fall back to JSON.stringify; symbol keys are rejected because
-// Symbol.toString is not stable across realms and the L1 would dedup by
-// description, which is wrong.
+// Objects and functions use WeakMap-backed identity IDs so L1 mirrors
+// lru-cache's SameValueZero key semantics instead of structural equality.
+// Symbol keys are rejected because Symbol.toString is not stable across realms
+// and the L1 would dedup by description, which is wrong.
 //
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type
 export function encodeL1Key(key: {}): string {
@@ -55,8 +68,10 @@ export function encodeL1Key(key: {}): string {
       return `i:${key.toString()}`;
     case 'symbol':
       throw new Error('L1 does not support symbol keys');
+    case 'function':
+      return `f:${objectKeyId(key)}`;
     default:
-      return `o:${JSON.stringify(key)}`;
+      return `o:${objectKeyId(key)}`;
   }
 }
 
@@ -80,12 +95,14 @@ const FRESH_STATS = (): L1Stats => ({
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type
 export class LocalL1Cache<V extends {} = {}> {
   readonly #cache: LRUCache<string, L1Envelope<V>>;
+  readonly #ttl?: number;
   #latestSeen = 0;
   readonly #stats = FRESH_STATS();
   readonly #emit: L1EmitFn;
 
   constructor(opts: L1ConstructorOptions) {
     this.#emit = opts.emit ?? (() => undefined);
+    this.#ttl = opts.ttl;
     const lruOpts = {
       max: opts.max ?? 1000,
       ttl: opts.ttl,
@@ -128,12 +145,14 @@ export class LocalL1Cache<V extends {} = {}> {
     return entry.value;
   }
 
-  set(encodedKey: string, value: V, version: number): void {
+  set(encodedKey: string, value: V, version: number, ttl?: number): void {
     if (version < this.#latestSeen) {
       // Don't store an entry already known to be stale.
       return;
     }
-    this.#cache.set(encodedKey, { value, version });
+    const setOpts = this.#setOptions(ttl);
+    if (setOpts === false) return;
+    this.#cache.set(encodedKey, { value, version }, setOpts);
     this.#stats.sets += 1;
     this.#emit('set', { key: encodedKey, version });
   }
@@ -166,5 +185,11 @@ export class LocalL1Cache<V extends {} = {}> {
   // For tests / explicit teardown.
   destroy(): void {
     this.#cache.clear();
+  }
+
+  #setOptions(ttl: number | undefined): { ttl: number } | undefined | false {
+    if (ttl === undefined || !Number.isFinite(ttl)) return undefined;
+    const capped = this.#ttl === undefined ? ttl : Math.min(ttl, this.#ttl);
+    return capped > 0 ? { ttl: capped } : false;
   }
 }

@@ -6,8 +6,11 @@ import { LRUCacheClustered } from '../src/index.ts';
 void test('encodeL1Key handles primitives and objects', () => {
   assert.equal(encodeL1Key('a'), 's:a');
   assert.equal(encodeL1Key(42), 'n:42');
-  // Object keys serialize to JSON
-  assert.equal(encodeL1Key({ x: 1 }), 'o:{"x":1}');
+  // Object keys preserve identity, not structural JSON equality.
+  const a = { x: 1 };
+  const b = { x: 1 };
+  assert.equal(encodeL1Key(a), encodeL1Key(a));
+  assert.notEqual(encodeL1Key(a), encodeL1Key(b));
   // Symbol is rejected
   const sym = Symbol('s');
   assert.throws(() => encodeL1Key(sym), /symbol/i);

@@ -558,6 +558,28 @@ void test('fetch forceRefresh keeps the refreshed value cached when an older fet
   assert.equal(await cache.get('k'), 2);
 });
 
+void test('fetch does not populate L1 when fetchStore rejects an older token', async () => {
+  caches.clear();
+  const cache = new LRUCacheClustered<string, number>({
+    namespace: 'fetch-l1-rejected-token',
+    max: 10,
+    localL1: { enabled: true, experimental: true, ttl: 1000 },
+  });
+
+  const stale = async () => {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    return 1;
+  };
+  const fresh = async () => 2;
+
+  const older = cache.fetch('k', stale);
+  await Promise.resolve();
+
+  assert.equal(await cache.fetch('k', fresh, { forceRefresh: true }), 2);
+  assert.equal(await older, 2);
+  assert.equal(await cache.get('k'), 2);
+});
+
 void test('fetch propagates fetcher errors and clears in-flight slot', async () => {
   caches.clear();
   const cache = new LRUCacheClustered<string, string>({ namespace: 'fetch-3', max: 10 });
@@ -739,6 +761,52 @@ void test('get returns undefined for missing key without populating L1', async (
   assert.equal(c.localStats()?.size, 0); // no negative caching in v1
 });
 
+void test('L1 object keys preserve lru-cache identity semantics', async () => {
+  const c = new LRUCacheClustered<{ id: number }, string>({
+    namespace: 'l1-object-identity',
+    max: 10,
+    localL1: { enabled: true, experimental: true, ttl: 1000 },
+  });
+  const a = { id: 1 };
+  const b = { id: 1 };
+  await c.set(a, 'first');
+  await c.set(b, 'second');
+
+  assert.equal(await c.get(a), 'first');
+  assert.equal(await c.get(b), 'second');
+});
+
+void test('L1 entry TTL is capped by per-write primary TTL', async () => {
+  const c = new LRUCacheClustered<string, number>({
+    namespace: 'l1-per-entry-ttl',
+    max: 10,
+    localL1: { enabled: true, experimental: true, ttl: 1000 },
+  });
+  await c.set('a', 1, { ttl: 20 });
+  assert.equal(await c.get('a'), 1); // populate L1 with remaining L2 TTL
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  assert.equal(await c.get('a'), undefined);
+});
+
+void test('ttl setter clears L1 and future L1 entries honor the lowered ttl', async () => {
+  const c = new LRUCacheClustered<string, number>({
+    namespace: 'l1-ttl-setter',
+    max: 10,
+    ttl: 1000,
+    localL1: { enabled: true, experimental: true, ttl: 1000 },
+  });
+  await c.set('a', 1);
+  await c.get('a');
+  assert.equal(c.localStats()?.size, 1);
+
+  await c.ttl(20);
+  assert.equal(c.localStats()?.size, 0);
+  await c.set('b', 2);
+  assert.equal(await c.get('b'), 2);
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  assert.equal(await c.get('b'), undefined);
+});
+
 void test('set self-invalidates the calling worker L1 entry', async () => {
   const c = new LRUCacheClustered<string, number>({
     namespace: 'l1-self-inv',
@@ -751,6 +819,22 @@ void test('set self-invalidates the calling worker L1 entry', async () => {
   await c.set('a', 2); // self-invalidates own L1 first
   // Next read repopulates with fresh value and version
   assert.equal(await c.get('a'), 2);
+});
+
+void test('same-process L1 instances invalidate each other', async () => {
+  const opts = {
+    namespace: 'l1-same-process',
+    max: 10,
+    localL1: { enabled: true, experimental: true, ttl: 1000 },
+  } as const;
+  const writer = new LRUCacheClustered<string, number>(opts);
+  const reader = new LRUCacheClustered<string, number>(opts);
+
+  await writer.set('a', 1);
+  assert.equal(await reader.get('a'), 1); // populate reader L1
+  assert.equal(reader.localStats()?.size, 1);
+  await writer.set('a', 2);
+  assert.equal(await reader.get('a'), 2);
 });
 
 void test('has with L1 enabled hits L1 after a populating get', async () => {
@@ -841,6 +925,20 @@ void test('mGet with L1 hits each present key in L1 after populate', async () =>
   assert.equal(c.localStats()?.hits, before + 2);
 });
 
+void test('mGet with bypassL1: true skips L1', async () => {
+  const c = new LRUCacheClustered<string, number>({
+    namespace: 'l1-mget-bypass',
+    max: 10,
+    localL1: { enabled: true, experimental: true, ttl: 1000 },
+  });
+  await c.set('a', 1);
+  await c.mGet(['a']); // populate
+  const before = c.localStats()?.hits ?? 0;
+  const r = await c.mGet(['a'], { bypassL1: true });
+  assert.equal(r.get('a'), 1);
+  assert.equal(c.localStats()?.hits, before);
+});
+
 void test('mSet bulk-clears local L1', async () => {
   const c = new LRUCacheClustered<string, number>({
     namespace: 'l1-mset',
@@ -884,6 +982,21 @@ void test('withoutLocal() routes reads past L1', async () => {
   const v = await fresh.get('a');
   assert.equal(v, 1);
   assert.equal(c.localStats()?.hits, before, 'withoutLocal does not register L1 hit');
+});
+
+void test('withoutLocal() routes mGet past L1', async () => {
+  const c = new LRUCacheClustered<string, number>({
+    namespace: 'l1-without-mget',
+    max: 10,
+    localL1: { enabled: true, experimental: true, ttl: 1000 },
+  });
+  await c.set('a', 1);
+  await c.mGet(['a']); // populate L1
+  const before = c.localStats()?.hits ?? 0;
+  const fresh = c.withoutLocal();
+  const v = await fresh.mGet(['a']);
+  assert.equal(v.get('a'), 1);
+  assert.equal(c.localStats()?.hits, before);
 });
 
 void test('withoutLocal().set still self-invalidates the underlying L1', async () => {

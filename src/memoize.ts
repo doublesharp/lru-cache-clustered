@@ -1,6 +1,6 @@
-import type { LRUCacheForClustersAsPromised, WriteOptions } from './index.js';
+import type { FetchOptions, LRUCacheForClustersAsPromised } from './index.js';
 
-export type MemoizeOptions = WriteOptions;
+export type MemoizeOptions = FetchOptions;
 
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type
 export function memoize<Args extends unknown[], K extends {}, V extends {}>(

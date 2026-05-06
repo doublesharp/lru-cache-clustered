@@ -220,12 +220,15 @@ void test('installClusterListener attaches handlers to workers that already exis
     } as Request;
     messageHandlers[0]!(request);
 
-    assert.equal(sentResponses.length, 1);
-    assert.equal((sentResponses[0] as { ok: boolean }).ok, true);
+    assert.equal(sentResponses.length, 2);
+    assert.equal(
+      sentResponses.some((msg) => (msg as { ok?: boolean }).ok === true),
+      true,
+    );
 
     // Non-matching messages are filtered out and never reach handleRequest.
     messageHandlers[0]!({ not: 'ours' });
-    assert.equal(sentResponses.length, 1);
+    assert.equal(sentResponses.length, 2);
   } finally {
     (cluster as unknown as { workers: Record<string, unknown> | undefined }).workers = originalWorkers;
   }
@@ -1298,7 +1301,7 @@ void test('init response value includes the current namespace version', async ()
   }
 });
 
-void test('dispatchAndBroadcast fans out single-key invalidation to other workers', async () => {
+void test('dispatchAndBroadcast fans out single-key invalidation to connected workers', async () => {
   const cluster = (await import('node:cluster')).default;
   const { dispatchAndBroadcast } = await import('../src/primary.ts');
 
@@ -1320,14 +1323,15 @@ void test('dispatchAndBroadcast fans out single-key invalidation to other worker
     const result = dispatchAndBroadcast('broadcast-test', { op: 'set', key: 'k', value: 1 }, { workerId: 1 });
     assert.equal(result.value, true);
     assert.equal(typeof result.version, 'number');
-    // Worker 1 is the caller; only worker 2 receives the broadcast
-    assert.equal(sent.length, 1);
-    assert.equal(sent[0]!.workerId, 2);
-    const msg = sent[0]!.msg as { push: string; namespace: string; key: unknown; version: number };
-    assert.equal(msg.push, 'l1:invalidate');
-    assert.equal(msg.namespace, 'broadcast-test');
-    assert.equal(msg.key, 'k');
-    assert.equal(msg.version, result.version);
+    assert.equal(sent.length, 2);
+    assert.deepEqual(sent.map((item) => item.workerId).sort(), [1, 2]);
+    for (const item of sent) {
+      const msg = item.msg as { push: string; namespace: string; key: unknown; version: number };
+      assert.equal(msg.push, 'l1:invalidate');
+      assert.equal(msg.namespace, 'broadcast-test');
+      assert.equal(msg.key, 'k');
+      assert.equal(msg.version, result.version);
+    }
   } finally {
     (cluster as unknown as { workers: Record<string, unknown> | undefined }).workers = original;
   }

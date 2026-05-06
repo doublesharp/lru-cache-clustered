@@ -1,6 +1,6 @@
 {
   "name": "@0xdoublesharp/lru-cache-clustered",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "LRU Cache that is safe for clusters, based on lru-cache. Save memory by only caching items on the main thread via a promisified interface.",
   "type": "module",
   "sideEffects": false,

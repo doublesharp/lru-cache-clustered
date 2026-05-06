@@ -485,7 +485,11 @@ export function dispatchOp(namespace: string, payload: ExecPayload, context: Dis
     }
     case 'ttl': {
       const cache = getCacheForPayload(namespace, payload);
-      if (typeof payload.value === 'number') (cache as unknown as { ttl: number }).ttl = payload.value;
+      const current = (cache as unknown as { ttl: number }).ttl;
+      if (typeof payload.value === 'number' && payload.value !== current) {
+        (cache as unknown as { ttl: number }).ttl = payload.value;
+        bumpNamespaceVersion(namespace);
+      }
       return (cache as unknown as { ttl: number }).ttl;
     }
     case 'allowStale': {
@@ -502,7 +506,16 @@ export function dispatchOp(namespace: string, payload: ExecPayload, context: Dis
 
 // Bulk ops broadcast a namespace-wide invalidate; single-key ops broadcast the
 // specific key. Reasoning in spec section 5.3.
-const BULK_BROADCAST_OPS = new Set(['destroy', 'clear', 'purgeStale', 'mSet', 'mDelete', 'load', 'max'] as const);
+const BULK_BROADCAST_OPS = new Set([
+  'destroy',
+  'clear',
+  'purgeStale',
+  'mSet',
+  'mDelete',
+  'load',
+  'max',
+  'ttl',
+] as const);
 
 function buildInvalidation(namespace: string, payload: ExecPayload, version: number): InvalidationPush | undefined {
   if ((BULK_BROADCAST_OPS as Set<string>).has(payload.op)) {
@@ -515,10 +528,9 @@ function buildInvalidation(namespace: string, payload: ExecPayload, version: num
   return { source: SOURCE, push: 'l1:invalidate', namespace, key, version };
 }
 
-function broadcastInvalidation(msg: InvalidationPush, exceptWorkerId?: number): void {
+function broadcastInvalidation(msg: InvalidationPush): void {
   for (const worker of Object.values(cluster.workers ?? {})) {
     if (!worker || !worker.isConnected()) continue;
-    if (worker.id === exceptWorkerId) continue;
     try {
       worker.send(msg);
     } catch (err) {
@@ -537,7 +549,7 @@ export function dispatchAndBroadcast(
   const after = getNamespaceVersion(namespace);
   if (after !== before) {
     const msg = buildInvalidation(namespace, payload, after);
-    if (msg) broadcastInvalidation(msg, context.workerId);
+    if (msg) broadcastInvalidation(msg);
   }
   return { value, version: after };
 }

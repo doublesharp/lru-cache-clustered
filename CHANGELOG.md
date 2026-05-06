@@ -13,7 +13,7 @@
   });
   ```
 
-- **Per-call bypass options** -- `get`, `has`, `peek`, `mGet`, `fetch`, and `memoize` accept `{ bypassL1: true }` to skip the local cache on a single call. `set` and `mSet` accept `{ updateL1: false }` to suppress the local write.
+- **Per-call bypass options** -- `get`, `has`, `peek`, `mGet`, `fetch`, and `memoize` accept `{ bypassL1: true }` to skip the local cache on a single call. `set` accepts `{ updateL1: true }` to populate the caller's L1 after a successful write; bulk writes clear the local L1.
 
 - **New methods**:
   - `clearLocal()` -- flush this worker's L1 for the namespace without touching the primary.

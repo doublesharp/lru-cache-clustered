@@ -1005,6 +1005,50 @@ void test('handleRequest mDelete only counts keys actually deleted', () => {
   assert.equal(s.deletes, 1);
 });
 
+void test('handleRequest mSet validates all entries before mutating', () => {
+  caches.clear();
+  stats.clear();
+  const ns = 'mset-validate-before-mutate';
+  handleRequest({ id: 'init', namespace: ns, source: SOURCE, op: 'init', options: { max: 4 } });
+
+  const r = handleRequest({
+    id: 'bad-mset',
+    namespace: ns,
+    source: SOURCE,
+    op: 'mSet',
+    entries: [
+      ['ok', 1],
+      [null, 2],
+    ],
+  });
+
+  assert.equal(r.ok, false);
+  assert.equal(caches.get(ns)?.get('ok'), undefined);
+  const get = handleRequest({ id: 'get', namespace: ns, source: SOURCE, op: 'get', key: 'ok' });
+  assert.equal(get.ok && get.version, 0);
+});
+
+void test('handleRequest mDelete validates all keys before mutating', () => {
+  caches.clear();
+  stats.clear();
+  const ns = 'mdelete-validate-before-mutate';
+  handleRequest({ id: 'init', namespace: ns, source: SOURCE, op: 'init', options: { max: 4 } });
+  handleRequest({ id: 'set', namespace: ns, source: SOURCE, op: 'set', key: 'a', value: 1 });
+
+  const r = handleRequest({
+    id: 'bad-mdelete',
+    namespace: ns,
+    source: SOURCE,
+    op: 'mDelete',
+    keys: ['a', null],
+  });
+
+  assert.equal(r.ok, false);
+  assert.equal(caches.get(ns)?.get('a'), 1);
+  const get = handleRequest({ id: 'get', namespace: ns, source: SOURCE, op: 'get', key: 'a' });
+  assert.equal(get.ok && get.version, 1);
+});
+
 void test('handleRequest setIfAbsent only counts sets when actually set', () => {
   caches.clear();
   stats.clear();
@@ -1309,6 +1353,38 @@ void test('dispatchAndBroadcast fans out namespace-wide invalidation for bulk op
     assert.equal(sent.length, 1);
     const msg = sent[0] as { push: string };
     assert.equal(msg.push, 'l1:invalidate-namespace');
+  } finally {
+    (cluster as unknown as { workers: Record<string, unknown> | undefined }).workers = original;
+  }
+});
+
+void test('dispatchAndBroadcast fans out namespace-wide invalidation for destroy', async () => {
+  const cluster = (await import('node:cluster')).default;
+  const { dispatchAndBroadcast } = await import('../src/primary.ts');
+
+  caches.clear();
+  stats.clear();
+  const sent: Array<unknown> = [];
+  const stub = {
+    id: 1,
+    isConnected: () => true,
+    send: (msg: unknown) => {
+      sent.push(msg);
+      return true;
+    },
+  };
+  const original = cluster.workers;
+  (cluster as unknown as { workers: Record<string, unknown> }).workers = { '1': stub };
+  try {
+    dispatchAndBroadcast('destroy-broadcast', { op: 'set', key: 'a', value: 1 }, { workerId: 99 });
+    sent.length = 0;
+    const result = dispatchAndBroadcast('destroy-broadcast', { op: 'destroy' }, { workerId: 99 });
+    assert.equal(result.value, true);
+    assert.equal(sent.length, 1);
+    const msg = sent[0] as { push: string; namespace: string; version: number };
+    assert.equal(msg.push, 'l1:invalidate-namespace');
+    assert.equal(msg.namespace, 'destroy-broadcast');
+    assert.equal(msg.version, result.version);
   } finally {
     (cluster as unknown as { workers: Record<string, unknown> | undefined }).workers = original;
   }

@@ -253,7 +253,9 @@ export function dispatchOp(namespace: string, payload: ExecPayload, context: Dis
       const cacheExisted = caches.delete(namespace);
       const statsExisted = stats.delete(namespace);
       const locksExisted = fetchLocks.delete(namespace);
-      return cacheExisted || statsExisted || locksExisted;
+      const existed = cacheExisted || statsExisted || locksExisted;
+      if (existed) bumpNamespaceVersion(namespace);
+      return existed;
     }
     case 'get': {
       const cache = getCacheForPayload(namespace, payload);
@@ -322,10 +324,15 @@ export function dispatchOp(namespace: string, payload: ExecPayload, context: Dis
     case 'mSet': {
       const cache = getCacheForPayload(namespace, payload);
       const s = getStats(namespace);
-      for (const [key, value, entryOpts] of payload.entries) {
+      const entries = payload.entries.map(([key, value, entryOpts]) => ({
+        key: requireNonNullish('cache key', key),
+        value: requireNonNullish('cache value', value),
+        entryOpts,
+      }));
+      for (const { key, value, entryOpts } of entries) {
         cache.set(
-          requireNonNullish('cache key', key),
-          requireNonNullish('cache value', value),
+          key,
+          value,
           buildSetOptions({
             ttl: entryOpts?.ttl ?? payload.ttl,
             size: entryOpts?.size ?? payload.size,
@@ -339,8 +346,9 @@ export function dispatchOp(namespace: string, payload: ExecPayload, context: Dis
     case 'mDelete': {
       const cache = getCacheForPayload(namespace, payload);
       const s = getStats(namespace);
-      for (const key of payload.keys) {
-        if (cache.delete(requireNonNullish('cache key', key))) s.deletes += 1;
+      const keys = payload.keys.map((key) => requireNonNullish('cache key', key));
+      for (const key of keys) {
+        if (cache.delete(key)) s.deletes += 1;
       }
       bumpNamespaceVersion(namespace);
       return undefined;
@@ -494,7 +502,7 @@ export function dispatchOp(namespace: string, payload: ExecPayload, context: Dis
 
 // Bulk ops broadcast a namespace-wide invalidate; single-key ops broadcast the
 // specific key. Reasoning in spec section 5.3.
-const BULK_BROADCAST_OPS = new Set(['clear', 'purgeStale', 'mSet', 'mDelete', 'load', 'max'] as const);
+const BULK_BROADCAST_OPS = new Set(['destroy', 'clear', 'purgeStale', 'mSet', 'mDelete', 'load', 'max'] as const);
 
 function buildInvalidation(namespace: string, payload: ExecPayload, version: number): InvalidationPush | undefined {
   if ((BULK_BROADCAST_OPS as Set<string>).has(payload.op)) {

@@ -42,13 +42,13 @@
 ## Features and infrastructure
 
 - Canonical package name is now `@0xdoublesharp/lru-cache-clustered`; `lru-cache-for-clusters-as-promised` is published from the same build at the same version
-- Added `LRUCacheClustered` short alias for `LRUCacheForClustersAsPromised` (both are exported)
+- Renamed canonical class to `LRUCacheClustered`; `LRUCacheForClustersAsPromised` is retained as a backward-compatible alias (both are exported)
 - Repository moved to `github.com/doublesharp/lru-cache-clustered`
 - Publish workflow (`scripts/prepare-publish.mjs` + `.github/workflows/npm-publish.yml`) builds once, prepares scoped and legacy package directories, and publishes both at the same version with npm provenance via GitHub Actions OIDC, triggered by `v*` tags
 - Publish prep validates required build artifacts before creating package directories
 - Scoped and legacy package copies share primary state in one process to avoid duplicate IPC listeners during migration
 - Dual ESM + CJS publish via `package.json` `exports`
-- Generic types: `LRUCacheForClustersAsPromised<K, V>`
+- Generic types: `LRUCacheClustered<K, V>`
 - Node `>=22` required
 - Added `destroy()` to tear down namespace caches, stats, and fetch coordination state on the primary
 - Added explicit startup controls via `LRUCacheClustered.bootstrap()` and `cache.healthCheck()`
@@ -73,7 +73,7 @@ See README "Migrating from older releases" for the full mapping.
 
 # 1.7.1 / 2021-03-25
 
-- Added `static getInstance(options)` to asynchronously return an `LRUCacheForClustersAsPromised` once the underlying `LRUCache` is guaranteed to exist.
+- Added `static getInstance(options)` to asynchronously return an `LRUCacheClustered` once the underlying `LRUCache` is guaranteed to exist.
 - Added `static getAllCaches()` to return all underlying `LRUCache` instances keyed by namespace. _Use only when `cluster.isMaster === true`._
 - Added `getCache()` to return underlying `LRUCache` instance. _Use only when `cluster.isMaster === true`._
 - Added test coverage via GitHub Actions

@@ -1,5 +1,5 @@
 import type { Stats } from './messages.js';
-import type { FetchOptions, LRUCacheForClustersAsPromised, MSetEntry, WriteOptions } from './index.js';
+import type { FetchOptions, LRUCacheClustered, MSetEntry, WriteOptions } from './index.js';
 
 // A codec is a symmetric encode/decode pair. Both directions may be sync or
 // async — gzip/brotli's sync flavours work fine, and so do MessagePack-style
@@ -18,7 +18,7 @@ export interface Codec<V, U> {
 // via `wrapped.cache` when needed.
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type
 export interface WrappedCache<K extends {}, V extends {}> {
-  readonly cache: LRUCacheForClustersAsPromised<K, never>;
+  readonly cache: LRUCacheClustered<K, never>;
   readonly namespace: string;
   readonly ready: Promise<void>;
 
@@ -51,7 +51,7 @@ export interface WrappedCache<K extends {}, V extends {}> {
 
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type
 export function wrap<K extends {}, V extends {}, U extends {}>(
-  cache: LRUCacheForClustersAsPromised<K, U>,
+  cache: LRUCacheClustered<K, U>,
   codec: Codec<V, U>,
 ): WrappedCache<K, V> {
   const enc = (v: V): U | Promise<U> => codec.encode(v);
@@ -61,7 +61,7 @@ export function wrap<K extends {}, V extends {}, U extends {}>(
   // who want to bypass the codec can drop in via `wrapped.cache as any` — we
   // don't try to make that ergonomic, since doing so is the whole point of an
   // escape hatch.
-  const underlying = cache as unknown as LRUCacheForClustersAsPromised<K, never>;
+  const underlying = cache as unknown as LRUCacheClustered<K, never>;
 
   const wrapped: WrappedCache<K, V> = {
     cache: underlying,

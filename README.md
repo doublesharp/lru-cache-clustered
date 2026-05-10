@@ -78,7 +78,7 @@ if (cluster.isPrimary) {
 
 A few things worth knowing up front:
 
-- **`LRUCacheClustered` is the short alias** for `LRUCacheForClustersAsPromised`. The long name is still exported.
+- **`LRUCacheClustered` is the canonical class.** `LRUCacheForClustersAsPromised` is still exported as a backward-compatible alias.
 - **Import in the primary before `cluster.fork()`.** The primary-side IPC listener is installed at module import. Call `LRUCacheClustered.bootstrap()` if you want that setup to be explicit.
 - **This is a coordination layer, not a security boundary.** Any code in any worker can use any namespace it knows; do not expose namespaces to untrusted callers.
 

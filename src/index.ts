@@ -212,7 +212,7 @@ function encodeL1KeyOrUndefined(key: unknown): string | undefined {
 // only to fail at the IPC boundary. The {} default for V mirrors lru-cache's
 // own default and means "any non-nullish value".
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type
-export class LRUCacheForClustersAsPromised<K extends {} = string, V extends {} = {}> {
+export class LRUCacheClustered<K extends {} = string, V extends {} = {}> {
   readonly namespace: string;
   readonly timeout: number;
   readonly failsafe: 'resolve' | 'reject';
@@ -287,8 +287,8 @@ export class LRUCacheForClustersAsPromised<K extends {} = string, V extends {} =
   // eslint-disable-next-line @typescript-eslint/no-empty-object-type
   static async getInstance<K extends {} = string, V extends {} = {}>(
     options: LRUCacheClusterOptions = {},
-  ): Promise<LRUCacheForClustersAsPromised<K, V>> {
-    const instance = new LRUCacheForClustersAsPromised<K, V>({
+  ): Promise<LRUCacheClustered<K, V>> {
+    const instance = new LRUCacheClustered<K, V>({
       ...options,
       noInit: true,
     });
@@ -311,14 +311,14 @@ export class LRUCacheForClustersAsPromised<K extends {} = string, V extends {} =
 
   static getAllCaches(): Map<string, LRUCache<NonNullish, NonNullish>> {
     if (cluster.isWorker) {
-      throw new Error('LRUCacheForClustersAsPromised.getAllCaches() must not be called from a worker');
+      throw new Error('LRUCacheClustered.getAllCaches() must not be called from a worker');
     }
     return caches;
   }
 
   getCache(): LRUCache<K & NonNullish, V & NonNullish> | undefined {
     if (cluster.isWorker) {
-      throw new Error('LRUCacheForClustersAsPromised.getCache() must not be called from a worker');
+      throw new Error('LRUCacheClustered.getCache() must not be called from a worker');
     }
     return caches.get(this.namespace) as LRUCache<K & NonNullish, V & NonNullish> | undefined;
   }
@@ -602,11 +602,11 @@ export class LRUCacheForClustersAsPromised<K extends {} = string, V extends {} =
   // on objects that are not genuine class instances. The Proxy get trap returns
   // either a bypassL1-injecting override for read methods or the real
   // instance's method bound to itself for everything else.
-  withoutLocal(): LRUCacheForClustersAsPromised<K, V> {
+  withoutLocal(): LRUCacheClustered<K, V> {
     // Using `t` (the Proxy target = the real instance) inside the trap avoids
     // a no-this-alias violation. All calls go through `t` so private fields
     // (#l1, etc.) remain accessible on the real instance.
-    let wrapper: LRUCacheForClustersAsPromised<K, V>;
+    let wrapper: LRUCacheClustered<K, V>;
     wrapper = new Proxy(this, {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       get(t, prop): any {
@@ -824,10 +824,10 @@ export class LRUCacheForClustersAsPromised<K extends {} = string, V extends {} =
   }
 }
 
-// Short alias — equivalent to `LRUCacheForClustersAsPromised`.
-export { LRUCacheForClustersAsPromised as LRUCacheClustered };
+// Backward-compatible alias — `LRUCacheClustered` is the canonical name.
+export { LRUCacheClustered as LRUCacheForClustersAsPromised };
 
 export { memoize, type MemoizeOptions } from './memoize.js';
 export { wrap, type Codec, type WrappedCache } from './codec.js';
 
-export default LRUCacheForClustersAsPromised;
+export default LRUCacheClustered;

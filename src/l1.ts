@@ -87,7 +87,7 @@ const FRESH_STATS = (): L1Stats => ({
   ipcAvoided: 0,
 });
 
-// Per-instance L1 cache. One LocalL1Cache per LRUCacheForClustersAsPromised.
+// Per-instance L1 cache. One LocalL1Cache per LRUCacheClustered.
 // Stores L1Envelope<V> so we can stamp each entry with the namespace version
 // at the moment it was populated; later reads compare against the latest
 // invalidation version we've observed for the namespace.

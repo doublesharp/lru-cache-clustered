@@ -107,6 +107,7 @@ function subscribeLocalInvalidations(namespace: string, handler: L1InvalidationH
   set.add(handler);
   return () => {
     const current = localInvalidationSubscribers.get(namespace);
+    /* c8 ignore next -- unsubscribe closures are nulled after use; this only protects stale internal closures. */
     if (!current) return;
     current.delete(handler);
     if (current.size === 0) localInvalidationSubscribers.delete(namespace);
@@ -156,6 +157,7 @@ function buildLocalInvalidation(
     return { source: SOURCE, push: 'l1:invalidate-namespace', namespace, version };
   }
   const key = (payload as { key?: unknown }).key;
+  /* c8 ignore next -- all current local single-key invalidations validate a non-nullish key before this point. */
   if (key === undefined || key === null) return undefined;
   return { source: SOURCE, push: 'l1:invalidate', namespace, key, version };
 }
@@ -708,7 +710,7 @@ export class LRUCacheClustered<K extends {} = string, V extends {} = {}> {
           }
         }
 
-        const observed = await this.peek(key, { bypassL1: !useFetchL1 || opts?.bypassL1 });
+        const observed = await this.peek(key, { bypassL1: !useFetchL1 });
         if (observed === undefined) {
           forceRefresh = false;
           await new Promise((resolve) => setTimeout(resolve, FETCH_POLL_MS));
@@ -746,8 +748,7 @@ export class LRUCacheClustered<K extends {} = string, V extends {} = {}> {
   }
 
   #applyL1Invalidation(msg: InvalidationPush): void {
-    if (!this.#l1) return;
-    this.#l1.advanceLatestSeen(msg.version);
+    this.#l1!.advanceLatestSeen(msg.version);
     // Emit broadcast-reason event before the L1 mutation so listeners can
     // distinguish broadcast-driven invalidations from local-write ones.
     this.#emitter.emit('l1:invalidate', {
@@ -757,28 +758,26 @@ export class LRUCacheClustered<K extends {} = string, V extends {} = {}> {
     });
     if (msg.push === 'l1:invalidate') {
       try {
-        this.#l1.delete(encodeL1Key(msg.key as NonNullish), msg.key, false);
+        this.#l1!.delete(encodeL1Key(msg.key as NonNullish), msg.key, false);
       } catch {
         // Symbol or unencodable key: no-op
       }
     } else {
-      this.#l1.clear(false);
+      this.#l1!.clear(false);
     }
   }
 
   async #setLocalFromPrimary(key: K, value: V, version: number): Promise<void> {
-    if (!this.#l1) return;
     const enc = encodeL1KeyOrUndefined(key);
     if (enc === undefined) return;
     const ttl = await this.#remainingLocalTTL(key);
     if (ttl === null) return;
-    this.#l1.set(enc, value, version, ttl, key);
+    this.#l1!.set(enc, value, version, ttl, key);
   }
 
   #getLocal(key: K): V | undefined {
-    if (!this.#l1) return undefined;
     const enc = encodeL1KeyOrUndefined(key);
-    return enc === undefined ? undefined : this.#l1.get(enc, key);
+    return enc === undefined ? undefined : this.#l1!.get(enc, key);
   }
 
   #deleteLocal(key: K): void {

@@ -6,6 +6,12 @@ import { LRUCacheClustered } from '../src/index.ts';
 void test('encodeL1Key handles primitives and objects', () => {
   assert.equal(encodeL1Key('a'), 's:a');
   assert.equal(encodeL1Key(42), 'n:42');
+  assert.equal(encodeL1Key(true), 'b:true');
+  assert.equal(encodeL1Key(42n), 'i:42');
+  function fn() {
+    return undefined;
+  }
+  assert.equal(encodeL1Key(fn), encodeL1Key(fn));
   // Object keys preserve identity, not structural JSON equality.
   const a = { x: 1 };
   const b = { x: 1 };
@@ -32,6 +38,98 @@ void test('LocalL1Cache deletes a single entry', () => {
   l1.set('s:b', 'w', 1);
   l1.delete('s:a');
   assert.equal(l1.get('s:a'), undefined);
+  assert.equal(l1.get('s:b'), 'w');
+});
+
+void test('LocalL1Cache skips entries older than latestSeen', () => {
+  const l1 = new LocalL1Cache({ max: 10, ttl: 1000 });
+  l1.advanceLatestSeen(2);
+  l1.set('s:a', 'v', 1);
+  assert.equal(l1.get('s:a'), undefined);
+  assert.equal(l1.stats().sets, 0);
+});
+
+void test('LocalL1Cache ignores non-positive per-entry ttl', () => {
+  const l1 = new LocalL1Cache({ max: 10, ttl: 1000 });
+  l1.set('s:a', 'v', 1, 0);
+  assert.equal(l1.get('s:a'), undefined);
+  assert.equal(l1.stats().sets, 0);
+});
+
+void test('LocalL1Cache treats non-finite per-entry ttl as default ttl', () => {
+  const l1 = new LocalL1Cache({ max: 10, ttl: 1000 });
+  l1.set('s:a', 'v', 1, Infinity);
+  assert.equal(l1.get('s:a'), 'v');
+});
+
+void test('LocalL1Cache reports evictions and supports explicit destroy', () => {
+  const events: Array<{ event: string; payload: { key?: unknown; reason?: string } }> = [];
+  const l1 = new LocalL1Cache({
+    max: 1,
+    ttl: 1000,
+    emit: (event, payload) => events.push({ event, payload }),
+  });
+  l1.set('s:a', 'v', 1, undefined, undefined);
+  l1.set('s:b', 'w', 1, undefined, 'b');
+
+  assert.equal(l1.stats().evictions, 1);
+  assert.deepEqual(
+    events.find((event) => event.event === 'evict'),
+    {
+      event: 'evict',
+      payload: { key: 's:a', reason: 'lru' },
+    },
+  );
+  assert.equal(l1.latestSeen(), 0);
+
+  l1.destroy();
+  assert.equal(l1.stats().size, 0);
+});
+
+void test('LocalL1Cache eviction reports original event keys', () => {
+  const events: Array<{ event: string; payload: { key?: unknown; reason?: string } }> = [];
+  const l1 = new LocalL1Cache({
+    max: 1,
+    ttl: 1000,
+    emit: (event, payload) => events.push({ event, payload }),
+  });
+  l1.set('s:a', 'v', 1, undefined, 'a');
+  l1.set('s:b', 'w', 1, undefined, 'b');
+
+  assert.deepEqual(
+    events.find((event) => event.event === 'evict'),
+    {
+      event: 'evict',
+      payload: { key: 'a', reason: 'lru' },
+    },
+  );
+});
+
+void test('LocalL1Cache eviction falls back when original event key is null', () => {
+  const events: Array<{ event: string; payload: { key?: unknown; reason?: string } }> = [];
+  const l1 = new LocalL1Cache({
+    max: 1,
+    ttl: 1000,
+    emit: (event, payload) => events.push({ event, payload }),
+  });
+  l1.set('s:a', 'v', 1, undefined, null);
+  l1.set('s:b', 'w', 1, undefined, 'b');
+
+  assert.deepEqual(
+    events.find((event) => event.event === 'evict'),
+    {
+      event: 'evict',
+      payload: { key: 's:a', reason: 'lru' },
+    },
+  );
+});
+
+void test('LocalL1Cache supports default max, maxSize, and uncapped per-entry ttl', () => {
+  const l1 = new LocalL1Cache({ maxSize: 2 });
+  l1.set('s:a', 'v', 1, 100);
+  l1.set('s:b', 'w', 1, 100);
+
+  assert.equal(l1.get('s:a'), 'v');
   assert.equal(l1.get('s:b'), 'w');
 });
 

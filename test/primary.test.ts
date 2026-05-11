@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import cluster from 'node:cluster';
-import { getOrCreateCache, caches, handleRequest, installClusterListener, stats } from '../src/primary.ts';
+import { getOrCreateCache, caches, handleRequest, installClusterListener, stats, versions } from '../src/primary.ts';
 import { SOURCE, deserializeError, serializeError, type Request, type Stats } from '../src/messages.ts';
 
 type PrimaryModule = typeof import('../src/primary.ts');
@@ -707,6 +707,23 @@ void test('handleRequest op=setIfAbsent honors optional ttl', () => {
   const remaining = (d('getRemainingTTL', { key: 'k' }) as { value: unknown }).value;
   assert.equal(typeof remaining, 'number');
   assert.ok((remaining as number) > 0 && (remaining as number) <= 30_000);
+});
+
+void test('handleRequest op=purgeStale bumps version when entries are purged', async () => {
+  caches.clear();
+  stats.clear();
+  versions.clear();
+  const ns = 'purge-stale-version';
+  const d = (op: string, extra: object = {}) =>
+    handleRequest({ id: 'r', namespace: ns, source: SOURCE, op, ...extra } as Request);
+
+  d('init', { options: { max: 10, ttl: 10 } });
+  d('set', { key: 'k', value: 'v' });
+  const before = versions.get(ns);
+  await new Promise((resolve) => setTimeout(resolve, 30));
+
+  assert.equal((d('purgeStale') as { value: unknown }).value, true);
+  assert.equal(versions.get(ns), (before ?? 0) + 1);
 });
 
 void test('handleRequest op=load restores entries from a dump', () => {
@@ -1442,6 +1459,19 @@ void test('dispatchAndBroadcast skips disconnected workers', async () => {
   try {
     dispatchAndBroadcast('mixed', { op: 'set', key: 'k', value: 1 }, { workerId: 99 });
     assert.equal(sent.length, 1);
+  } finally {
+    (cluster as unknown as { workers: Record<string, unknown> | undefined }).workers = original;
+  }
+});
+
+void test('dispatchAndBroadcast tolerates a missing worker registry', async () => {
+  const cluster = (await import('node:cluster')).default;
+  const { dispatchAndBroadcast } = await import('../src/primary.ts');
+
+  const original = cluster.workers;
+  (cluster as unknown as { workers: Record<string, unknown> | undefined }).workers = undefined;
+  try {
+    assert.doesNotThrow(() => dispatchAndBroadcast('no-workers', { op: 'set', key: 'k', value: 1 }, {}));
   } finally {
     (cluster as unknown as { workers: Record<string, unknown> | undefined }).workers = original;
   }

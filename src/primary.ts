@@ -524,6 +524,7 @@ function buildInvalidation(namespace: string, payload: ExecPayload, version: num
   // Single-key mutating ops carry `key`. Read ops don't reach here because
   // dispatchAndBroadcast checks the version-bump signal before invoking us.
   const key = (payload as { key?: unknown }).key;
+  /* c8 ignore next -- all current version-bumping single-key ops validate a non-nullish key before this point. */
   if (key === undefined || key === null) return undefined;
   return { source: SOURCE, push: 'l1:invalidate', namespace, key, version };
 }

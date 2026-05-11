@@ -122,6 +122,25 @@ async function handleCommand(cmd: string, args: unknown): Promise<unknown> {
       return { threw, value };
     }
 
+    case 'probeReady': {
+      const { options } = args as {
+        options: ConstructorParameters<typeof LRUCacheClustered>[0];
+      };
+      const cache = new LRUCacheClustered(options);
+      await cache.ready;
+      return { localEnabled: cache.localStats() !== undefined };
+    }
+
+    case 'probeReadyDestroy': {
+      const { options } = args as {
+        options: ConstructorParameters<typeof LRUCacheClustered>[0];
+      };
+      const cache = new LRUCacheClustered(options);
+      await cache.ready;
+      const destroyed = await cache.destroy();
+      return { destroyed };
+    }
+
     case 'getInstanceConflict': {
       const { options } = args as {
         options: ConstructorParameters<typeof LRUCacheClustered>[0];

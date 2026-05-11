@@ -57,6 +57,24 @@ void test('primary-mode size, keys, values, entries, clear', async () => {
   assert.equal(await cache.size(), 0);
 });
 
+void test('primary-mode non-L1 mutation helpers run without local invalidation state', async () => {
+  caches.clear();
+  const cache = new LRUCacheClustered<string, number>({ namespace: 'idx-no-l1-mutators', max: 10, ttl: 10 });
+  await cache.set('a', 1);
+  await cache.set('b', 2);
+  await cache.mDelete(['b']);
+  assert.equal(await cache.get('b'), undefined);
+  assert.equal(await cache.decr('a'), 0);
+
+  const dump = await cache.dump();
+  await cache.clear();
+  await cache.load(dump);
+  assert.equal(await cache.get('a'), 0);
+
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  assert.equal(await cache.purgeStale(), true);
+});
+
 void test('primary-mode config getters/setters', async () => {
   caches.clear();
   const cache = new LRUCacheClustered<string, number>({ namespace: 'idx-5', max: 10, ttl: 1000 });
@@ -693,6 +711,15 @@ void test('localL1 disabled by default returns undefined from localStats', () =>
   assert.equal(c.localStats(), undefined);
 });
 
+void test('localL1 enabled=false disables local cache', () => {
+  const c = new LRUCacheClustered({
+    namespace: 'l1-explicit-disabled',
+    max: 10,
+    localL1: { enabled: false },
+  });
+  assert.equal(c.localStats(), undefined);
+});
+
 void test('localL1 ttl clamps to primary ttl when greater', () => {
   // Construction succeeds; behaviour is exercised in later tasks.
   const c = new LRUCacheClustered({
@@ -709,9 +736,31 @@ void test('clearLocal is a no-op when L1 disabled', () => {
   c.clearLocal(); // does not throw
 });
 
+void test('clearLocal clears an enabled L1', async () => {
+  const c = new LRUCacheClustered<string, number>({
+    namespace: 'l1-clear-enabled',
+    max: 10,
+    localL1: { enabled: true, experimental: true, ttl: 1000 },
+  });
+  await c.set('a', 1);
+  await c.get('a');
+  assert.equal(c.localStats()?.size, 1);
+  c.clearLocal();
+  assert.equal(c.localStats()?.size, 0);
+});
+
 void test('invalidateLocal is a no-op when L1 disabled', () => {
   const c = new LRUCacheClustered({ namespace: 'l1-noop-2' });
   c.invalidateLocal('nope'); // does not throw
+});
+
+void test('invalidateLocal ignores nullish keys after L1 is enabled', () => {
+  const c = new LRUCacheClustered<string, number>({
+    namespace: 'l1-nullish-local-key',
+    max: 10,
+    localL1: { enabled: true, experimental: true, ttl: 1000 },
+  });
+  assert.doesNotThrow(() => c.invalidateLocal(null as never));
 });
 
 void test('get with L1 enabled hits L1 on second read in primary mode', async () => {
@@ -751,6 +800,19 @@ void test('get with bypassL1: true skips L1 entirely', async () => {
   assert.equal(c.localStats()?.hits, beforeHits);
 });
 
+void test('set with updateL1 populates the caller local cache', async () => {
+  const c = new LRUCacheClustered<string, number>({
+    namespace: 'l1-set-update',
+    max: 10,
+    localL1: { enabled: true, experimental: true, ttl: 1000 },
+  });
+  await c.set('a', 1, { updateL1: true });
+
+  const before = c.localStats()?.hits ?? 0;
+  assert.equal(await c.get('a'), 1);
+  assert.equal(c.localStats()?.hits, before + 1);
+});
+
 void test('get returns undefined for missing key without populating L1', async () => {
   const c = new LRUCacheClustered<string, number>({
     namespace: 'l1-miss',
@@ -759,6 +821,19 @@ void test('get returns undefined for missing key without populating L1', async (
   });
   assert.equal(await c.get('nope'), undefined);
   assert.equal(c.localStats()?.size, 0); // no negative caching in v1
+});
+
+void test('L1 skips symbol keys on get and population', async () => {
+  const c = new LRUCacheClustered<symbol, number>({
+    namespace: 'l1-symbol-get',
+    max: 10,
+    localL1: { enabled: true, experimental: true, ttl: 1000 },
+  });
+  const key = Symbol('k');
+  await c.set(key, 1);
+
+  assert.equal(await c.get(key), 1);
+  assert.equal(c.localStats()?.size, 0);
 });
 
 void test('L1 object keys preserve lru-cache identity semantics', async () => {
@@ -878,6 +953,18 @@ void test('peek with L1 enabled hits L1 (peek is a read)', async () => {
   const v = await c.peek('a');
   assert.equal(v, 1);
   assert.equal(c.localStats()?.hits, before + 1);
+});
+
+void test('peek with L1 enabled populates from primary on miss', async () => {
+  const c = new LRUCacheClustered<string, number>({
+    namespace: 'l1-peek-populate',
+    max: 10,
+    localL1: { enabled: true, experimental: true, ttl: 1000 },
+  });
+  await c.set('a', 1);
+
+  assert.equal(await c.peek('a'), 1);
+  assert.equal(c.localStats()?.size, 1);
 });
 
 void test('delete self-invalidates and advances latestSeen', async () => {
@@ -1009,6 +1096,22 @@ void test('localL1 methods.fetch can use L1 even when methods.get is disabled', 
   assert.equal(c.localStats()?.hits, before + 1);
 });
 
+void test('fetch with L1 enabled populates from an existing primary value', async () => {
+  const c = new LRUCacheClustered<string, number>({
+    namespace: 'l1-fetch-l2-hit',
+    max: 10,
+    localL1: { enabled: true, experimental: true, ttl: 1000 },
+  });
+  await c.set('a', 1);
+
+  assert.equal(await c.fetch('a', () => 2), 1);
+  assert.equal(c.localStats()?.size, 1);
+
+  const before = c.localStats()?.hits ?? 0;
+  assert.equal(await c.fetch('a', () => 3), 1);
+  assert.equal(c.localStats()?.hits, before + 1);
+});
+
 void test('localL1 methods.get controls peek and mGet reads', async () => {
   const c = new LRUCacheClustered<string, number>({
     namespace: 'l1-method-get-family',
@@ -1066,6 +1169,22 @@ void test('mSet bulk-clears local L1', async () => {
   assert.equal(c.localStats()?.size, 0);
 });
 
+void test('mDelete bulk-clears local L1', async () => {
+  const c = new LRUCacheClustered<string, number>({
+    namespace: 'l1-mdelete',
+    max: 10,
+    localL1: { enabled: true, experimental: true, ttl: 1000 },
+  });
+  await c.mSet([
+    ['a', 1],
+    ['b', 2],
+  ]);
+  await c.mGet(['a', 'b']);
+  assert.equal(c.localStats()?.size, 2);
+  await c.mDelete(['a']);
+  assert.equal(c.localStats()?.size, 0);
+});
+
 void test('incr self-invalidates own L1 entry on the calling worker', async () => {
   const c = new LRUCacheClustered<string, number>({
     namespace: 'l1-incr',
@@ -1078,6 +1197,39 @@ void test('incr self-invalidates own L1 entry on the calling worker', async () =
   // Next get must repopulate from primary (the L1 entry was invalidated)
   const v = await c.get('count');
   assert.equal(v, 6);
+});
+
+void test('decr self-invalidates own L1 entry on the calling worker', async () => {
+  const c = new LRUCacheClustered<string, number>({
+    namespace: 'l1-decr',
+    max: 10,
+    localL1: { enabled: true, experimental: true, ttl: 1000 },
+  });
+  await c.set('count', 5);
+  await c.get('count');
+  await c.decr('count');
+  assert.equal(await c.get('count'), 4);
+});
+
+void test('purgeStale and load clear local L1', async () => {
+  const c = new LRUCacheClustered<string, number>({
+    namespace: 'l1-purge-load',
+    max: 10,
+    ttl: 10,
+    localL1: { enabled: true, experimental: true, ttl: 1000 },
+  });
+  await c.set('a', 1);
+  await c.get('a');
+  assert.equal(c.localStats()?.size, 1);
+  await c.load(await c.dump());
+  assert.equal(c.localStats()?.size, 0);
+
+  await c.set('b', 2);
+  await c.get('b');
+  assert.equal(c.localStats()?.size, 1);
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  await c.purgeStale();
+  assert.equal(c.localStats()?.size, 0);
 });
 
 void test('withoutLocal() routes reads past L1', async () => {
@@ -1110,6 +1262,41 @@ void test('withoutLocal() routes mGet past L1', async () => {
   assert.equal(c.localStats()?.hits, before);
 });
 
+void test('withoutLocal() routes has and peek past L1', async () => {
+  const c = new LRUCacheClustered<string, number>({
+    namespace: 'l1-without-has-peek',
+    max: 10,
+    localL1: { enabled: true, experimental: true, ttl: 1000 },
+  });
+  await c.set('a', 1);
+  await c.get('a');
+
+  const before = c.localStats()?.hits ?? 0;
+  const fresh = c.withoutLocal();
+  assert.equal(await fresh.has('a'), true);
+  assert.equal(await fresh.peek('a'), 1);
+  assert.equal(c.localStats()?.hits, before);
+});
+
+void test('withoutLocal() routes fetch past L1', async () => {
+  const namespace = 'l1-without-fetch';
+  const reader = new LRUCacheClustered<string, number>({
+    namespace,
+    max: 10,
+    localL1: { enabled: true, experimental: true, ttl: 1000, invalidation: 'ttl-only' },
+  });
+  const writer = new LRUCacheClustered<string, number>({ namespace, max: 10 });
+
+  await writer.set('a', 1);
+  await reader.get('a');
+  await writer.set('a', 2);
+
+  const before = reader.localStats()?.hits ?? 0;
+  const fresh = reader.withoutLocal();
+  assert.equal(await fresh.fetch('a', () => 3), 2);
+  assert.equal(reader.localStats()?.hits, before);
+});
+
 void test('withoutLocal().set still self-invalidates the underlying L1', async () => {
   const c = new LRUCacheClustered<string, number>({
     namespace: 'l1-without-set',
@@ -1136,6 +1323,15 @@ void test('withoutLocal() is idempotent', async () => {
   const b = a.withoutLocal();
   // The second call returns the same wrapper as the first.
   assert.equal(a, b);
+});
+
+void test('withoutLocal() exposes non-function properties from the target', () => {
+  const c = new LRUCacheClustered<string, number>({
+    namespace: 'l1-without-property',
+    max: 10,
+    localL1: { enabled: true, experimental: true, ttl: 1000 },
+  });
+  assert.equal(c.withoutLocal().namespace, 'l1-without-property');
 });
 
 void test('l1:hit and l1:miss events fire', async () => {
@@ -1199,6 +1395,42 @@ void test('broadcast invalidation emits one raw-key event and suppresses interna
   assert.deepEqual(events, [{ namespace, key: 'a', reason: 'broadcast' }]);
 });
 
+void test('broadcast invalidation ignores unencodable symbol keys', async () => {
+  const namespace = 'l1-broadcast-symbol';
+  const reader = new LRUCacheClustered<symbol, number>({
+    namespace,
+    max: 10,
+    localL1: { enabled: true, experimental: true, ttl: 1000 },
+  });
+  const writer = new LRUCacheClustered<symbol, number>({
+    namespace,
+    max: 10,
+    localL1: { enabled: true, experimental: true, ttl: 1000 },
+  });
+  const key = Symbol('k');
+  const events: unknown[] = [];
+  reader.on('l1:invalidate', (p) => events.push(p));
+
+  await assert.doesNotReject(writer.set(key, 1));
+  assert.deepEqual(events, [{ namespace, key, reason: 'broadcast' }]);
+});
+
+void test('destroy unsubscribes local L1 invalidation listeners', async () => {
+  const namespace = 'l1-destroy-unsubscribe';
+  const reader = new LRUCacheClustered<string, number>({
+    namespace,
+    max: 10,
+    localL1: { enabled: true, experimental: true, ttl: 1000 },
+  });
+  const writer = new LRUCacheClustered<string, number>({
+    namespace,
+    max: 10,
+    localL1: { enabled: true, experimental: true, ttl: 1000 },
+  });
+  await reader.destroy();
+  await assert.doesNotReject(writer.set('a', 1));
+});
+
 void test('localL1 ttl-only mode ignores same-process broadcast invalidations', async () => {
   const namespace = 'l1-ttl-only';
   const reader = new LRUCacheClustered<string, number>({
@@ -1236,6 +1468,50 @@ void test('off() removes a listener', () => {
   // Trigger a miss
   void c.get('nope').catch(() => {});
   assert.equal(count, 0);
+});
+
+void test('once() registers a one-shot listener', async () => {
+  const c = new LRUCacheClustered<string, number>({
+    namespace: 'l1-once-evt',
+    max: 10,
+    localL1: { enabled: true, experimental: true, ttl: 1000 },
+  });
+  let count = 0;
+  c.once('l1:miss', () => {
+    count += 1;
+  });
+
+  await c.get('a');
+  await c.get('b');
+  assert.equal(count, 1);
+});
+
+void test('L1 population is skipped when remaining primary ttl cannot be read', async () => {
+  const c = new LRUCacheClustered<string, number>({
+    namespace: 'l1-remaining-ttl-error',
+    max: 10,
+    localL1: { enabled: true, experimental: true, ttl: 1000 },
+  });
+  await c.set('a', 1);
+  c.getRemainingTTL = async () => {
+    throw new Error('ttl failed');
+  };
+
+  assert.equal(await c.get('a'), 1);
+  assert.equal(c.localStats()?.size, 0);
+});
+
+void test('L1 population is skipped when remaining primary ttl is unavailable', async () => {
+  const c = new LRUCacheClustered<string, number>({
+    namespace: 'l1-remaining-ttl-undefined',
+    max: 10,
+    localL1: { enabled: true, experimental: true, ttl: 1000 },
+  });
+  await c.set('a', 1);
+  c.getRemainingTTL = async () => undefined as unknown as number;
+
+  assert.equal(await c.get('a'), 1);
+  assert.equal(c.localStats()?.size, 0);
 });
 
 void test('localL1 enabled without experimental: true throws', () => {

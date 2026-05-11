@@ -108,6 +108,46 @@ void test(
   },
 );
 
+void test('worker constructor ready installs local L1 after init', { timeout: 15_000 }, async () => {
+  new LRUCacheClustered({ namespace: 'l1-worker-ready', max: 100, ttl: 60_000 });
+  setupHarness();
+
+  const worker = await forkWorker();
+  try {
+    const result = await worker.send<{ localEnabled: boolean }>('probeReady', {
+      options: {
+        namespace: 'l1-worker-ready',
+        max: 100,
+        ttl: 60_000,
+        localL1: { enabled: true, experimental: true, ttl: 5_000 },
+      },
+    });
+    assert.deepEqual(result, { localEnabled: true });
+  } finally {
+    await worker.stop();
+  }
+});
+
+void test('worker destroy unsubscribes IPC L1 invalidations', { timeout: 15_000 }, async () => {
+  new LRUCacheClustered({ namespace: 'l1-worker-destroy', max: 100, ttl: 60_000 });
+  setupHarness();
+
+  const worker = await forkWorker();
+  try {
+    const result = await worker.send<{ destroyed: boolean }>('probeReadyDestroy', {
+      options: {
+        namespace: 'l1-worker-destroy',
+        max: 100,
+        ttl: 60_000,
+        localL1: { enabled: true, experimental: true, ttl: 5_000 },
+      },
+    });
+    assert.deepEqual(result, { destroyed: true });
+  } finally {
+    await worker.stop();
+  }
+});
+
 void test('incr from N workers: final count correct, no L1 race', { timeout: 15_000 }, async () => {
   // Pre-create the namespace on primary so workers can find it.
   new LRUCacheClustered({ namespace: 'l1-incr', max: 10 });

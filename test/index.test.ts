@@ -807,6 +807,21 @@ void test('ttl setter clears L1 and future L1 entries honor the lowered ttl', as
   assert.equal(await c.get('b'), undefined);
 });
 
+void test('max setter clears L1 because primary capacity may evict entries', async () => {
+  const c = new LRUCacheClustered<string, number>({
+    namespace: 'l1-max-clear',
+    max: 2,
+    localL1: { enabled: true, experimental: true, ttl: 1000 },
+  });
+  await c.set('a', 1);
+  await c.set('b', 2);
+  await c.get('a');
+  await c.get('b');
+  assert.equal(c.localStats()?.size, 2);
+  await c.max(1);
+  assert.equal(c.localStats()?.size, 0);
+});
+
 void test('set self-invalidates the calling worker L1 entry', async () => {
   const c = new LRUCacheClustered<string, number>({
     namespace: 'l1-self-inv',

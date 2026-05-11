@@ -55,7 +55,6 @@ export type LocalL1Options = {
     get?: boolean;
     has?: boolean;
     fetch?: boolean;
-    memoize?: boolean;
   };
   experimental?: boolean;
 };
@@ -82,7 +81,7 @@ type NormalizedL1 = {
   allowStale: boolean;
   cacheUndefined: boolean;
   invalidation: 'broadcast' | 'ttl-only';
-  methods: { get: boolean; has: boolean; fetch: boolean; memoize: boolean };
+  methods: { get: boolean; has: boolean; fetch: boolean };
 };
 
 type L1InvalidationHandler = (msg: InvalidationPush) => void;
@@ -183,12 +182,11 @@ function normalizeL1(
 
   const methods =
     opts.methods === undefined
-      ? { get: true, has: true, fetch: true, memoize: true }
+      ? { get: true, has: true, fetch: true }
       : {
           get: opts.methods.get === true,
           has: opts.methods.has === true,
           fetch: opts.methods.fetch === true,
-          memoize: opts.methods.memoize === true,
         };
 
   return {
@@ -231,7 +229,7 @@ export class LRUCacheClustered<K extends {} = string, V extends {} = {}> {
   readonly #inFlight = new Map<K, { promise: Promise<V> }>();
   readonly #emitter = new EventEmitter();
   readonly #l1?: LocalL1Cache<V & NonNullish>;
-  readonly #l1Methods: { get: boolean; has: boolean; fetch: boolean; memoize: boolean };
+  readonly #l1Methods: { get: boolean; has: boolean; fetch: boolean };
   readonly #l1Invalidation: 'broadcast' | 'ttl-only';
   // eslint-disable-next-line no-unused-private-class-members
   readonly #l1CacheUndefined: boolean;
@@ -251,7 +249,7 @@ export class LRUCacheClustered<K extends {} = string, V extends {} = {}> {
     this.#lruOptions = lruOpts;
 
     const l1Config = normalizeL1(options.localL1, lruOpts);
-    this.#l1Methods = l1Config?.methods ?? { get: false, has: false, fetch: false, memoize: false };
+    this.#l1Methods = l1Config?.methods ?? { get: false, has: false, fetch: false };
     this.#l1Invalidation = l1Config?.invalidation ?? 'broadcast';
     this.#l1CacheUndefined = l1Config?.cacheUndefined ?? false;
     if (l1Config) {

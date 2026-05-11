@@ -1009,6 +1009,47 @@ void test('localL1 methods.fetch can use L1 even when methods.get is disabled', 
   assert.equal(c.localStats()?.hits, before + 1);
 });
 
+void test('localL1 methods.get controls peek and mGet reads', async () => {
+  const c = new LRUCacheClustered<string, number>({
+    namespace: 'l1-method-get-family',
+    max: 10,
+    localL1: { enabled: true, experimental: true, ttl: 1000, methods: { fetch: true } },
+  });
+  await c.fetch('a', () => 1);
+  assert.equal(c.localStats()?.size, 1);
+
+  const before = c.localStats()?.hits ?? 0;
+  assert.equal(await c.peek('a'), 1);
+  assert.equal(c.localStats()?.hits, before, 'peek did not use L1 when get was omitted from methods');
+
+  const values = await c.mGet(['a']);
+  assert.equal(values.get('a'), 1);
+  assert.equal(c.localStats()?.hits, before, 'mGet did not use L1 when get was omitted from methods');
+
+  assert.equal(await c.fetch('a', () => 2), 1);
+  assert.equal(c.localStats()?.hits, before + 1, 'fetch still uses L1 when explicitly enabled');
+});
+
+void test('fetch bypassL1 does not piggyback on a stale L1 hit', async () => {
+  const namespace = 'l1-fetch-bypass-inflight';
+  const reader = new LRUCacheClustered<string, number>({
+    namespace,
+    max: 10,
+    localL1: { enabled: true, experimental: true, ttl: 1000, invalidation: 'ttl-only' },
+  });
+  const writer = new LRUCacheClustered<string, number>({ namespace, max: 10 });
+
+  await writer.set('a', 1);
+  await reader.get('a');
+  await writer.set('a', 2);
+
+  const stale = reader.fetch('a', () => 3);
+  const fresh = reader.fetch('a', () => 4, { bypassL1: true });
+
+  assert.equal(await stale, 1);
+  assert.equal(await fresh, 2);
+});
+
 void test('mSet bulk-clears local L1', async () => {
   const c = new LRUCacheClustered<string, number>({
     namespace: 'l1-mset',

@@ -370,7 +370,7 @@ export class LRUCacheClustered<K extends {} = string, V extends {} = {}> {
     return r.value;
   }
   async peek(key: K, opts?: ReadOptions): Promise<V | undefined> {
-    const useL1 = this.#l1 && !opts?.bypassL1;
+    const useL1 = this.#l1 && this.#l1Methods.get && !opts?.bypassL1;
     if (useL1) {
       const hit = this.#getLocal(key);
       if (hit !== undefined) return hit;
@@ -633,26 +633,20 @@ export class LRUCacheClustered<K extends {} = string, V extends {} = {}> {
   }
 
   async fetch(key: K, fetcher: (key: K) => Promise<V> | V, opts?: FetchOptions): Promise<V> {
-    // forceRefresh bypasses BOTH the cached-value check and the existing
-    // in-flight slot; piggybacking on a previous fetcher's result would
-    // contradict the "force a fresh fetch" intent. The new fetch overwrites
-    // the in-flight slot so subsequent non-force callers can still dedup.
-    //
-    // Install the slot before the first await so concurrent callers piggyback
-    // on a single miss-path `get()` instead of each issuing their own read.
+    const useFetchL1 = this.#l1 && this.#l1Methods.fetch && !opts?.bypassL1;
     if (!opts?.forceRefresh) {
+      if (useFetchL1) {
+        const cachedLocal = this.#getLocal(key);
+        if (cachedLocal !== undefined) return cachedLocal;
+      }
+
       const existing = this.#inFlight.get(key);
       if (existing) return existing.promise;
     }
 
     let slot!: { promise: Promise<V> };
     const run = async (): Promise<V> => {
-      const useFetchL1 = this.#l1 && this.#l1Methods.fetch && !opts?.bypassL1;
       if (!opts?.forceRefresh) {
-        if (useFetchL1) {
-          const cachedLocal = this.#getLocal(key);
-          if (cachedLocal !== undefined) return cachedLocal;
-        }
         if (useFetchL1) {
           const cached = await this.#dispatchWithMeta<V | undefined>({ op: 'get', key }, this.failsafe);
           if (cached.value !== undefined) {
@@ -664,6 +658,7 @@ export class LRUCacheClustered<K extends {} = string, V extends {} = {}> {
           if (cached !== undefined) return cached;
         }
       }
+
       let forceRefresh = opts?.forceRefresh === true;
 
       while (true) {

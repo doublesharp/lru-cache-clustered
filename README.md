@@ -323,7 +323,7 @@ await cache.set('user:42', { id: 42, name: 'ada' });
 await cache.get('user:42'); // decoded back to { id: 42, name: 'ada' }
 ```
 
-`encode` and `decode` may be sync or async. The wrapped surface covers value-touching ops (`get`, `set`, `setIfAbsent`, `peek`, `mGet`, `mSet`, `values`, `entries`, async iteration, `fetch`) plus the lifecycle and metric pass-throughs (`has`, `delete`, `keys`, `size`, `clear`, `destroy`, `healthCheck`, `purgeStale`, `getRemainingTTL`, `stats`). Wrapped `get`, `has`, `peek`, `mGet`, and `fetch` forward `{ bypassL1: true }` to the underlying cache.
+`encode` and `decode` may be sync or async. The wrapped surface covers value-touching ops (`get`, `set`, `setIfAbsent`, `peek`, `mGet`, `mSet`, `values`, `entries`, async iteration, `fetch`) plus the lifecycle and metric pass-throughs (`has`, `delete`, `keys`, `size`, `clear`, `destroy`, `healthCheck`, `purgeStale`, `getRemainingTTL`, `stats`). Wrapped `get`, `has`, `peek`, `mGet`, and `fetch` forward read options such as `{ bypassL1: true }` to the underlying cache.
 
 `incr` / `decr` and `dump` / `load` are not wrapped &mdash; they speak in numbers or the raw stored form. Reach them via `wrapped.cache` if you need them.
 

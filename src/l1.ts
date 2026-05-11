@@ -15,12 +15,13 @@ export type L1Stats = {
 type L1Envelope<V> = {
   value: V;
   version: number;
+  key: unknown;
 };
 
 type L1EmitEvent = 'hit' | 'miss' | 'set' | 'invalidate' | 'evict' | 'stale-hit';
 
 type L1EmitPayload = {
-  key?: string; // encoded key, may be omitted for namespace-wide events
+  key?: unknown;
   version?: number;
   reason?: string;
 };
@@ -113,61 +114,66 @@ export class LocalL1Cache<V extends {} = {}> {
       // expose it in the public LocalL1Options. If a caller passes maxSize,
       // we use a 1-per-entry calculation as a placeholder.
       ...(opts.maxSize !== undefined ? { sizeCalculation: () => 1 } : {}),
-      dispose: (_value: L1Envelope<V>, key: string, reason: LRUCache.DisposeReason) => {
+      dispose: (value: L1Envelope<V>, key: string, reason: LRUCache.DisposeReason) => {
         if (reason === 'evict') {
           this.#stats.evictions += 1;
-          this.#emit('evict', { key, reason: 'lru' });
+          this.#emit('evict', { key: value.key ?? key, reason: 'lru' });
         }
       },
     } as ConstructorParameters<typeof LRUCache<string, L1Envelope<V>>>[0];
     this.#cache = new LRUCache(lruOpts);
   }
 
-  get(encodedKey: string): V | undefined {
-    const entry = this.#cache.get(encodedKey);
+  get(encodedKey: string, eventKey: unknown = encodedKey): V | undefined {
+    const status: { returnedStale?: true } = {};
+    const entry = this.#cache.get(encodedKey, { status });
     if (!entry) {
       this.#stats.misses += 1;
-      this.#emit('miss', { key: encodedKey });
+      this.#emit('miss', { key: eventKey });
       return undefined;
+    }
+    if (status.returnedStale) {
+      this.#stats.staleHits += 1;
+      this.#emit('stale-hit', { key: entry.key });
     }
     if (entry.version < this.#latestSeen) {
       // Stamped before the latest invalidation; drop it.
       this.#cache.delete(encodedKey);
       this.#stats.misses += 1;
       this.#stats.staleHits += 1;
-      this.#emit('stale-hit', { key: encodedKey });
-      this.#emit('miss', { key: encodedKey });
+      this.#emit('stale-hit', { key: entry.key });
+      this.#emit('miss', { key: eventKey });
       return undefined;
     }
     this.#stats.hits += 1;
     this.#stats.ipcAvoided += 1;
-    this.#emit('hit', { key: encodedKey });
+    this.#emit('hit', { key: entry.key });
     return entry.value;
   }
 
-  set(encodedKey: string, value: V, version: number, ttl?: number): void {
+  set(encodedKey: string, value: V, version: number, ttl?: number, eventKey: unknown = encodedKey): void {
     if (version < this.#latestSeen) {
       // Don't store an entry already known to be stale.
       return;
     }
     const setOpts = this.#setOptions(ttl);
     if (setOpts === false) return;
-    this.#cache.set(encodedKey, { value, version }, setOpts);
+    this.#cache.set(encodedKey, { value, version, key: eventKey }, setOpts);
     this.#stats.sets += 1;
-    this.#emit('set', { key: encodedKey, version });
+    this.#emit('set', { key: eventKey, version });
   }
 
-  delete(encodedKey: string): void {
+  delete(encodedKey: string, eventKey: unknown = encodedKey, emit = true): void {
     if (this.#cache.delete(encodedKey)) {
       this.#stats.invalidations += 1;
-      this.#emit('invalidate', { key: encodedKey, reason: 'self' });
+      if (emit) this.#emit('invalidate', { key: eventKey, reason: 'self' });
     }
   }
 
-  clear(): void {
+  clear(emit = true): void {
     if (this.#cache.size > 0) this.#stats.invalidations += 1;
     this.#cache.clear();
-    this.#emit('invalidate', { reason: 'clear' });
+    if (emit) this.#emit('invalidate', { key: '*', reason: 'clear' });
   }
 
   advanceLatestSeen(version: number): void {

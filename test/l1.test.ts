@@ -65,6 +65,14 @@ void test('LocalL1Cache TTL expires entries', async () => {
   assert.equal(l1.get('s:a'), undefined);
 });
 
+void test('LocalL1Cache staleHits counts allowStale TTL-stale reads', async () => {
+  const l1 = new LocalL1Cache({ max: 10, ttl: 20, allowStale: true });
+  l1.set('s:a', 'v', 1, undefined, 'a');
+  await new Promise((r) => setTimeout(r, 40));
+  assert.equal(l1.get('s:a', 'a'), 'v');
+  assert.equal(l1.stats().staleHits, 1);
+});
+
 void test('worker-mode L1 reacts to invalidateLocal (proxy for the broadcast handler effect)', async () => {
   // We can't easily mock cluster.isWorker in primary mode; the cross-worker
   // behaviour is exercised in cluster tests (Task 13). This unit test just

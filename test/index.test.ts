@@ -664,7 +664,7 @@ void test('getRemainingTTL normalizes null to Infinity (JSON IPC compatibility)'
   assert.equal(ttl, Infinity);
 });
 
-void test('constructor accepts localL1 option (boolean shorthand)', () => {
+void test('constructor accepts localL1 enabled option', () => {
   const c = new LRUCacheClustered({
     namespace: 'l1-bool',
     max: 10,
@@ -925,6 +925,31 @@ void test('mGet with L1 hits each present key in L1 after populate', async () =>
   assert.equal(c.localStats()?.hits, before + 2);
 });
 
+void test('mGet preserves input order when L1 partially hits', async () => {
+  const c = new LRUCacheClustered<string, number>({
+    namespace: 'l1-mget-order',
+    max: 10,
+    localL1: { enabled: true, experimental: true, ttl: 1000 },
+  });
+  await c.mSet([
+    ['a', 1],
+    ['b', 2],
+    ['c', 3],
+  ]);
+  await c.get('a');
+  await c.get('c');
+
+  const r = await c.mGet(['a', 'b', 'c']);
+  assert.deepEqual(
+    [...r.entries()],
+    [
+      ['a', 1],
+      ['b', 2],
+      ['c', 3],
+    ],
+  );
+});
+
 void test('mGet with bypassL1: true skips L1', async () => {
   const c = new LRUCacheClustered<string, number>({
     namespace: 'l1-mget-bypass',
@@ -937,6 +962,36 @@ void test('mGet with bypassL1: true skips L1', async () => {
   const r = await c.mGet(['a'], { bypassL1: true });
   assert.equal(r.get('a'), 1);
   assert.equal(c.localStats()?.hits, before);
+});
+
+void test('localL1 method subset treats absent methods as disabled', async () => {
+  const c = new LRUCacheClustered<string, number>({
+    namespace: 'l1-method-subset',
+    max: 10,
+    localL1: { enabled: true, experimental: true, ttl: 1000, methods: { get: true } },
+  });
+  await c.set('a', 1);
+  await c.get('a');
+
+  const beforeHas = c.localStats()?.hits ?? 0;
+  assert.equal(await c.has('a'), true);
+  assert.equal(c.localStats()?.hits, beforeHas, 'has did not use L1 when omitted from methods');
+
+  const beforeFetch = c.localStats()?.hits ?? 0;
+  assert.equal(await c.fetch('a', () => 2), 1);
+  assert.equal(c.localStats()?.hits, beforeFetch, 'fetch did not use L1 when omitted from methods');
+});
+
+void test('localL1 methods.fetch can use L1 even when methods.get is disabled', async () => {
+  const c = new LRUCacheClustered<string, number>({
+    namespace: 'l1-method-fetch-only',
+    max: 10,
+    localL1: { enabled: true, experimental: true, ttl: 1000, methods: { fetch: true } },
+  });
+  await c.fetch('a', () => 1);
+  const before = c.localStats()?.hits ?? 0;
+  assert.equal(await c.fetch('a', () => 2), 1);
+  assert.equal(c.localStats()?.hits, before + 1);
 });
 
 void test('mSet bulk-clears local L1', async () => {
@@ -1042,6 +1097,10 @@ void test('l1:hit and l1:miss events fire', async () => {
   const names = events.map((e) => e.name);
   assert.ok(names.includes('l1:miss'));
   assert.ok(names.includes('l1:hit'));
+  assert.deepEqual(
+    events.map((e) => (e.payload as { key?: unknown }).key),
+    ['a', 'a'],
+  );
 });
 
 void test('l1:invalidate event fires on set self-invalidate', async () => {
@@ -1056,6 +1115,54 @@ void test('l1:invalidate event fires on set self-invalidate', async () => {
   c.on('l1:invalidate', (p) => events.push(p));
   await c.set('a', 2);
   assert.ok(events.length >= 1);
+  assert.deepEqual(
+    events.map((event) => (event as { key?: unknown }).key),
+    ['a'],
+  );
+});
+
+void test('broadcast invalidation emits one raw-key event and suppresses internal encoded event', async () => {
+  const namespace = 'l1-broadcast-event';
+  const reader = new LRUCacheClustered<string, number>({
+    namespace,
+    max: 10,
+    localL1: { enabled: true, experimental: true, ttl: 1000 },
+  });
+  const writer = new LRUCacheClustered<string, number>({
+    namespace,
+    max: 10,
+    localL1: { enabled: true, experimental: true, ttl: 1000 },
+  });
+  await writer.set('a', 1);
+  await reader.get('a');
+
+  const events: unknown[] = [];
+  reader.on('l1:invalidate', (p) => events.push(p));
+  await writer.set('a', 2);
+
+  assert.deepEqual(events, [{ namespace, key: 'a', reason: 'broadcast' }]);
+});
+
+void test('localL1 ttl-only mode ignores same-process broadcast invalidations', async () => {
+  const namespace = 'l1-ttl-only';
+  const reader = new LRUCacheClustered<string, number>({
+    namespace,
+    max: 10,
+    localL1: { enabled: true, experimental: true, ttl: 1000, invalidation: 'ttl-only' },
+  });
+  const writer = new LRUCacheClustered<string, number>({
+    namespace,
+    max: 10,
+    localL1: { enabled: true, experimental: true, ttl: 1000 },
+  });
+  await writer.set('a', 1);
+  await reader.get('a');
+  await writer.set('a', 2);
+
+  const before = reader.localStats()?.hits ?? 0;
+  assert.equal(await reader.get('a'), 1);
+  assert.equal(reader.localStats()?.hits, before + 1);
+  assert.equal(await reader.get('a', { bypassL1: true }), 2);
 });
 
 void test('off() removes a listener', () => {

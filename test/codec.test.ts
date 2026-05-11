@@ -290,3 +290,31 @@ void test('wrap() forwards through L1', async () => {
   await wrapped.get('a');
   assert.equal(cache.localStats()?.hits, before + 1);
 });
+
+void test('wrap() forwards read bypass options through L1-aware methods', async () => {
+  const cache = new LRUCacheClustered<string, Buffer>({
+    namespace: 'codec-l1-bypass',
+    max: 10,
+    localL1: { enabled: true, experimental: true, ttl: 1000 },
+  });
+  const codec = {
+    encode: (v: { x: number }) => Buffer.from(JSON.stringify(v)),
+    decode: (b: Buffer) => JSON.parse(b.toString()) as { x: number },
+  };
+  const wrapped = wrap(cache, codec);
+  await wrapped.set('a', { x: 1 });
+  await wrapped.get('a');
+
+  const beforeGet = cache.localStats()?.hits ?? 0;
+  assert.deepEqual(await wrapped.get('a', { bypassL1: true }), { x: 1 });
+  assert.equal(cache.localStats()?.hits, beforeGet);
+
+  const beforeHas = cache.localStats()?.hits ?? 0;
+  assert.equal(await wrapped.has('a', { bypassL1: true }), true);
+  assert.equal(cache.localStats()?.hits, beforeHas);
+
+  const beforeMGet = cache.localStats()?.hits ?? 0;
+  const values = await wrapped.mGet(['a'], { bypassL1: true });
+  assert.deepEqual(values.get('a'), { x: 1 });
+  assert.equal(cache.localStats()?.hits, beforeMGet);
+});

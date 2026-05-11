@@ -1,5 +1,5 @@
 import type { Stats } from './messages.js';
-import type { FetchOptions, LRUCacheClustered, MSetEntry, WriteOptions } from './index.js';
+import type { FetchOptions, LRUCacheClustered, MSetEntry, ReadOptions, WriteOptions } from './index.js';
 
 // A codec is a symmetric encode/decode pair. Both directions may be sync or
 // async — gzip/brotli's sync flavours work fine, and so do MessagePack-style
@@ -22,15 +22,15 @@ export interface WrappedCache<K extends {}, V extends {}> {
   readonly namespace: string;
   readonly ready: Promise<void>;
 
-  get(key: K): Promise<V | undefined>;
+  get(key: K, opts?: ReadOptions): Promise<V | undefined>;
   set(key: K, value: V, opts?: WriteOptions): Promise<boolean>;
   setIfAbsent(key: K, value: V, opts?: WriteOptions): Promise<boolean>;
-  has(key: K): Promise<boolean>;
-  peek(key: K): Promise<V | undefined>;
+  has(key: K, opts?: ReadOptions): Promise<boolean>;
+  peek(key: K, opts?: ReadOptions): Promise<V | undefined>;
   delete(key: K): Promise<boolean>;
   getRemainingTTL(key: K): Promise<number>;
 
-  mGet(keys: K[]): Promise<Map<K, V | undefined>>;
+  mGet(keys: K[], opts?: ReadOptions): Promise<Map<K, V | undefined>>;
   mSet(entries: Iterable<MSetEntry<K, V>>, opts?: WriteOptions): Promise<void>;
   mDelete(keys: K[]): Promise<void>;
 
@@ -68,8 +68,8 @@ export function wrap<K extends {}, V extends {}, U extends {}>(
     namespace: cache.namespace,
     ready: cache.ready,
 
-    async get(key) {
-      const raw = await cache.get(key);
+    async get(key, opts) {
+      const raw = await cache.get(key, opts);
       return raw === undefined ? undefined : await dec(raw);
     },
     async set(key, value, opts) {
@@ -78,16 +78,16 @@ export function wrap<K extends {}, V extends {}, U extends {}>(
     async setIfAbsent(key, value, opts) {
       return cache.setIfAbsent(key, await enc(value), opts);
     },
-    has: (key) => cache.has(key),
-    async peek(key) {
-      const raw = await cache.peek(key);
+    has: (key, opts) => cache.has(key, opts),
+    async peek(key, opts) {
+      const raw = await cache.peek(key, opts);
       return raw === undefined ? undefined : await dec(raw);
     },
     delete: (key) => cache.delete(key),
     getRemainingTTL: (key) => cache.getRemainingTTL(key),
 
-    async mGet(keys) {
-      const raw = await cache.mGet(keys);
+    async mGet(keys, opts) {
+      const raw = await cache.mGet(keys, opts);
       const out = new Map<K, V | undefined>();
       for (const [k, v] of raw) out.set(k, v === undefined ? undefined : await dec(v));
       return out;

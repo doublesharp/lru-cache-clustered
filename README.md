@@ -21,7 +21,7 @@ Node's `cluster` module gives every worker its own heap, so an in-process cache 
 This package keeps a single `lru-cache` in the primary and lets every worker read and write it over `cluster` IPC. One copy of the data, shared warmth across workers, and atomic counters and single-flight fetches that stay correct cluster-wide. No Redis tier, no sidecar.
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/doublesharp/lru-cache-clustered/main/assets/topology.svg" alt="One LRU cache shared across cluster workers via IPC. The primary process holds a Map of namespaced LRUCache instances; each worker sends typed IPC requests to the primary for every cache operation." width="100%">
+  <img src="https://raw.githubusercontent.com/doublesharp/lru-cache-clustered/main/assets/topology.svg" alt="Clustered LRU topology. The primary process owns authoritative namespaced caches and version counters; workers can use typed IPC or optional local L1 caches for hot reads, with writes broadcasting invalidations." width="100%">
 </p>
 
 ## Highlights

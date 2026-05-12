@@ -15,15 +15,27 @@
 
 - **Per-call bypass options** -- `get`, `has`, `peek`, `mGet`, `fetch`, and `memoize` accept `{ bypassL1: true }` to skip the local cache on a single call. `set` accepts `{ updateL1: true }` to populate the caller's L1 after a successful write; bulk writes clear the local L1.
 
+- **Method-level L1 controls** -- `localL1.methods` can restrict L1 to specific read families (`get`, `has`, and `fetch`). When `methods` is provided, omitted method keys are disabled. `memoize()` delegates to `fetch()`, so its L1 behavior follows the `fetch` setting.
+
+- **Invalidation mode control** -- the default `localL1.invalidation: 'broadcast'` subscribes same-process and cross-worker invalidation pushes. `localL1.invalidation: 'ttl-only'` is available for callers that intentionally want to rely only on the local TTL window.
+
 - **New methods**:
   - `clearLocal()` -- flush this worker's L1 for the namespace without touching the primary.
   - `invalidateLocal(key)` -- drop a single key from this worker's L1.
   - `localStats()` -- returns `{ enabled, hits, misses, sets, invalidations, evictions, staleHits, size, ipcAvoided }`.
   - `withoutLocal()` -- returns a bypass view that routes all reads through the primary; the original instance is unaffected.
 
-- **New events**: `l1:hit`, `l1:miss`, `l1:set`, `l1:invalidate`, `l1:evict`. Each carries `{ namespace, key }`.
+- **New events**: `l1:hit`, `l1:miss`, `l1:set`, `l1:invalidate`, `l1:evict`, and `l1:stale-hit`. Each carries `{ namespace, key }`; namespace-wide invalidations use `key: '*'`.
 
 - **Wire format** -- IPC responses now carry an optional `version` field; push (invalidation broadcast) messages were added. Backward compatible: a v2.0 worker talking to a v2.1 primary ignores the unknown field; a v2.1 worker talking to a v2.0 primary simply receives no invalidation broadcasts and relies on TTL expiry.
+
+## Fixes and validation
+
+- Fixed `fetch(..., { bypassL1: true })` so followers do not observe or repopulate stale L1 state while preserving primary-side single-flight coordination.
+- Tightened L1 method-option semantics so provided `methods` objects consistently disable omitted read families.
+- Hardened local invalidation handling for nullish or unencodable keys, repeated unsubscribe calls, worker destroy, bulk operations, TTL changes, capacity changes, and primary load/purge paths.
+- Added regression coverage for L1 TTL clamping, per-entry TTL handling, local stats/events, same-process invalidation, worker invalidation broadcasts, and fetch bypass behavior.
+- Test coverage now reaches 100% statements, branches, functions, and lines for `src/**/*.ts`.
 
 # 2.0.0 / 2026-04-28
 

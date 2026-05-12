@@ -99,16 +99,18 @@ Reach for something else when you need sharing across multiple machines (use Red
 
 ## Examples
 
-Runnable clustered server examples &mdash; see [`examples/README.md`](./examples/README.md) for run instructions and curl recipes.
+Runnable clustered server examples &mdash; see [`examples/README.md`](./examples/README.md) for curl recipes and environment variables.
 
-- [`clustered-users-server.ts`](./examples/clustered-users-server.ts) &mdash; shared read-through user cache via `memoize()` / `fetch()`
-- [`clustered-rate-limit-server.ts`](./examples/clustered-rate-limit-server.ts) &mdash; fixed-window rate limiting via atomic `incr()`
-- [`clustered-session-server.ts`](./examples/clustered-session-server.ts) &mdash; shared session storage via `set()` / `get()` / `delete()`
-- [`clustered-idempotency-server.ts`](./examples/clustered-idempotency-server.ts) &mdash; idempotent job intake via `setIfAbsent()`
-- [`clustered-compressed-documents-server.ts`](./examples/clustered-compressed-documents-server.ts) &mdash; compressed document caching via `wrap()`
-- [`clustered-l1-server.ts`](./examples/clustered-l1-server.ts) &mdash; local L1 mode with per-worker stats, bypass reads, and invalidation
-- [`clustered-l1-controls-server.ts`](./examples/clustered-l1-controls-server.ts) &mdash; v2.1 L1 controls: method filtering, `withoutLocal()`, `updateL1`, and local invalidation
-- [`clustered-multilayer-redis-server.ts`](./examples/clustered-multilayer-redis-server.ts) &mdash; clustered LRU as L1 in front of Redis as L2, with cluster-wide single-flight on cold keys
+| Example                                                                                           | Run                                                 | Feature it demonstrates                                                              |
+| ------------------------------------------------------------------------------------------------- | --------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| [`clustered-users-server.ts`](./examples/clustered-users-server.ts)                               | `pnpm example:users`                                | Shared read-through user cache via `memoize()` / `fetch()`                           |
+| [`clustered-rate-limit-server.ts`](./examples/clustered-rate-limit-server.ts)                     | `pnpm example:rate-limit`                           | Fixed-window rate limiting via atomic `incr()`                                       |
+| [`clustered-session-server.ts`](./examples/clustered-session-server.ts)                           | `pnpm example:sessions`                             | Shared `set()` / `get()` / `delete()` state across workers                           |
+| [`clustered-idempotency-server.ts`](./examples/clustered-idempotency-server.ts)                   | `pnpm example:idempotency`                          | Idempotent job intake via `setIfAbsent()`                                            |
+| [`clustered-compressed-documents-server.ts`](./examples/clustered-compressed-documents-server.ts) | `pnpm example:documents`                            | Compressed document caching via `wrap()`                                             |
+| [`clustered-l1-server.ts`](./examples/clustered-l1-server.ts)                                     | `node --import tsx examples/clustered-l1-server.ts` | Local L1 mode with per-worker stats, bypass reads, and invalidation                  |
+| [`clustered-l1-controls-server.ts`](./examples/clustered-l1-controls-server.ts)                   | `pnpm example:l1`                                   | v2.1 L1 controls: method filtering, `withoutLocal()`, `updateL1`, local invalidation |
+| [`clustered-multilayer-redis-server.ts`](./examples/clustered-multilayer-redis-server.ts)         | `pnpm example:multilayer`                           | Clustered LRU as L1 in front of Redis L2 with single-flight cold-miss collapsing     |
 
 ## Local L1 mode
 

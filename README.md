@@ -107,6 +107,7 @@ Runnable clustered server examples &mdash; see [`examples/README.md`](./examples
 - [`clustered-idempotency-server.ts`](./examples/clustered-idempotency-server.ts) &mdash; idempotent job intake via `setIfAbsent()`
 - [`clustered-compressed-documents-server.ts`](./examples/clustered-compressed-documents-server.ts) &mdash; compressed document caching via `wrap()`
 - [`clustered-l1-server.ts`](./examples/clustered-l1-server.ts) &mdash; local L1 mode with per-worker stats, bypass reads, and invalidation
+- [`clustered-l1-controls-server.ts`](./examples/clustered-l1-controls-server.ts) &mdash; v2.1 L1 controls: method filtering, `withoutLocal()`, `updateL1`, and local invalidation
 - [`clustered-multilayer-redis-server.ts`](./examples/clustered-multilayer-redis-server.ts) &mdash; clustered LRU as L1 in front of Redis as L2, with cluster-wide single-flight on cold keys
 
 ## Local L1 mode

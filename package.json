@@ -42,6 +42,7 @@
     "example:sessions": "node --import tsx examples/clustered-session-server.ts",
     "example:idempotency": "node --import tsx examples/clustered-idempotency-server.ts",
     "example:documents": "node --import tsx examples/clustered-compressed-documents-server.ts",
+    "example:l1": "node --import tsx examples/clustered-l1-controls-server.ts",
     "example:multilayer": "node --import tsx examples/clustered-multilayer-redis-server.ts",
     "test": "node --import tsx --test test/*.test.ts",
     "test:coverage": "c8 --reporter=text --reporter=lcov --include='src/**/*.ts' pnpm test",

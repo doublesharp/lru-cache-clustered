@@ -8,6 +8,7 @@ pnpm example:rate-limit
 pnpm example:sessions
 pnpm example:idempotency
 pnpm example:documents
+pnpm example:l1
 pnpm example:multilayer
 ```
 
@@ -20,6 +21,7 @@ They import `../src/index.ts` so you can exercise the current workspace without 
 | `sessions`    | Shared `set()` / `get()` / `delete()` state across workers                          |
 | `idempotency` | `setIfAbsent()` for cluster-wide duplicate suppression / once-only claim            |
 | `documents`   | `wrap()` with gzip + base64 for compressed values that survive cluster IPC          |
+| `l1`          | Local L1 controls: method filtering, bypass reads, updateL1, and local invalidation |
 | `multilayer`  | Clustered LRU as L1 in front of Redis L2, with single-flight collapsing cold misses |
 
 ## `clustered-users-server.ts`
@@ -108,6 +110,28 @@ What to look for:
 - Responses include both `jsonBytes` and `storedBytes`.
 - The compressed size stays in the primary while callers read and write decoded JSON values.
 
+## `clustered-l1-controls-server.ts`
+
+Small product cache that demonstrates v2.1 local L1 controls.
+
+```sh
+pnpm example:l1
+curl http://127.0.0.1:3006/products/42
+curl http://127.0.0.1:3006/products/42
+curl http://127.0.0.1:3006/products/42/direct-get
+curl http://127.0.0.1:3006/products/42/fresh
+curl http://127.0.0.1:3006/products/42/seed
+curl http://127.0.0.1:3006/products/42/invalidate
+curl http://127.0.0.1:3006/stats
+```
+
+What to look for:
+
+- The example enables `localL1.methods: { fetch: true }`, so repeated `/products/42` calls use L1 through `fetch()` and increase `localStats.ipcAvoided`.
+- `/products/42/direct-get` uses `get()`, which is intentionally not L1-enabled in this example.
+- `/products/42/fresh` uses `withoutLocal().fetch()` for a correctness-sensitive read path.
+- `/products/42/seed` demonstrates `set(..., { updateL1: true })`, and `/invalidate` demonstrates `invalidateLocal(key)`.
+
 ## `clustered-multilayer-redis-server.ts`
 
 Two-layer cache demonstrating clustered LRU as L1 in front of Redis as L2, with a simulated origin behind both. Uses `cache.fetch()` so concurrent L1 misses for the same key collapse to a single Redis read across the whole cluster.
@@ -152,3 +176,8 @@ The multilayer example also accepts:
 - `L1_TTL_MS` (default `5000`)
 - `L2_TTL_S` (default `60`)
 - `ORIGIN_LATENCY_MS` (default `250`)
+
+The L1 example also accepts:
+
+- `CACHE_TTL_MS` (default `30000`)
+- `L1_TTL_MS` (default `2000`)

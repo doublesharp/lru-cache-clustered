@@ -87,19 +87,19 @@ void test('primary-mode config getters/setters', async () => {
   assert.equal(await cache.allowStale(true), true);
 });
 
-void test('primary-mode max setter preserves per-entry TTL metadata', async () => {
+void test('primary-mode max setter preserves per-entry TTL metadata', async (t) => {
+  t.mock.method(performance, 'now', () => 10_000);
+  t.mock.method(Date, 'now', () => 100_000);
   caches.clear();
   const cache = new LRUCacheClustered<string, string>({ namespace: 'idx-5-ttl', max: 10 });
-  await cache.set('k', 'v', { ttl: 50 });
-  await new Promise((r) => setTimeout(r, 20));
+  await cache.load([['k', { value: 'v', ttl: 5000, start: 98_000 }]]);
   const before = await cache.getRemainingTTL('k');
 
   await cache.max(50);
   const after = await cache.getRemainingTTL('k');
 
-  assert.ok(before > 0);
-  assert.ok(after > 0, `expected positive ttl after rebuild, got ${after}`);
-  assert.ok(after <= before, `expected ttl to keep ticking down (${after} <= ${before})`);
+  assert.equal(before, 3000);
+  assert.equal(after, 3000, 'resizing must preserve the original expiration');
 });
 
 void test('namespace isolation between instances', async () => {

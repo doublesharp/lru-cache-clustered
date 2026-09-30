@@ -2,6 +2,7 @@ import cluster from 'node:cluster';
 import { gzipSync, gunzipSync } from 'node:zlib';
 import { setTimeout } from 'node:timers';
 import { LRUCacheClustered, wrap } from '../../src/index.ts';
+import { getDefaultClient } from '../../src/worker.ts';
 
 if (!cluster.isWorker) throw new Error('worker-harness loaded outside a worker');
 
@@ -59,11 +60,13 @@ async function handleCommand(cmd: string, args: unknown): Promise<unknown> {
     case 'fetchLocal':
     case 'readLocal':
     case 'mGetLocal':
+    case 'destroyLocal':
     case 'statsLocal': {
       const { namespace, key, keys } = args as { namespace: string; key: string; keys: string[] };
       const cache = localCaches.get(namespace);
       if (!cache) throw new Error(`local cache not opened: ${namespace}`);
       if (cmd === 'statsLocal') return cache.localStats();
+      if (cmd === 'destroyLocal') return cache.destroy();
       const value =
         cmd === 'fetchLocal'
           ? await cache.fetch(key, () => 42)
@@ -176,6 +179,25 @@ async function handleCommand(cmd: string, args: unknown): Promise<unknown> {
       } catch (error) {
         const serialized = serializeError(error);
         return { ok: false, ...serialized };
+      }
+    }
+
+    case 'probeFailedInitSubscription': {
+      const options = args as ConstructorParameters<typeof LRUCacheClustered>[0];
+      const client = getDefaultClient();
+      const original = client.subscribeInvalidations;
+      let subscriptions = 0;
+      client.subscribeInvalidations = function (...parameters) {
+        subscriptions += 1;
+        return original.apply(this, parameters);
+      };
+      try {
+        await LRUCacheClustered.getInstance(options);
+        return { rejected: false, subscriptions };
+      } catch {
+        return { rejected: true, subscriptions };
+      } finally {
+        client.subscribeInvalidations = original;
       }
     }
 

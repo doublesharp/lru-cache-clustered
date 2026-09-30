@@ -2,6 +2,25 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { LRUCacheClustered } from '../src/index.ts';
 
+void test('reusing a destroyed instance restores local invalidation subscriptions', async () => {
+  const options = { namespace: 'l1-reused-after-destroy', max: 10 };
+  const reader = new LRUCacheClustered<string, number>({
+    ...options,
+    localL1: { experimental: true, ttl: 5000 },
+  });
+  const writer = new LRUCacheClustered<string, number>(options);
+  await reader.set('key', 1);
+  assert.equal(await reader.destroy(), true);
+  await writer.set('key', 2);
+  assert.equal(await reader.get('key'), 2);
+  assert.equal(await reader.get('key'), 2);
+  assert.equal(reader.localStats()?.hits, 1, 'the reused instance has a warm L1');
+  await writer.set('key', 3);
+  assert.equal(reader.localStats()?.size, 0, 'the other instance must invalidate the reused reader');
+  assert.equal(await reader.get('key'), 3);
+  await reader.destroy();
+});
+
 void test('invalidation arriving before a read continuation prevents stale L1 population', async () => {
   const namespace = 'race-1';
   const reader = new LRUCacheClustered<string, number>({

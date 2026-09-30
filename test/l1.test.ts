@@ -4,6 +4,24 @@ import assert from 'node:assert/strict';
 import { LocalL1Cache, encodeL1Key } from '../src/l1.ts';
 import { LRUCacheClustered } from '../src/index.ts';
 
+void test('a primary ttl of zero does not shorten the configured local TTL', async (t) => {
+  let now = 1000;
+  t.mock.method(performance, 'now', () => now);
+  const cache = new LRUCacheClustered<string, string>({
+    namespace: 'l1-primary-no-expiry',
+    max: 10,
+    ttl: 0,
+    localL1: { experimental: true, ttl: 2000, updateAgeOnGet: false },
+  });
+  await cache.set('key', 'value');
+  assert.equal(await cache.get('key'), 'value');
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  now += 200;
+  assert.equal(await cache.get('key'), 'value');
+  assert.equal(cache.localStats()?.hits, 1, 'ttl: 0 means no primary expiration');
+  await cache.destroy();
+});
+
 void test('encodeL1Key handles primitives and objects', () => {
   assert.equal(encodeL1Key('a'), 's:a');
   assert.equal(encodeL1Key(42), 'n:42');

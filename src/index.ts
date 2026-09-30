@@ -167,17 +167,15 @@ function normalizeL1(
   const opts: LocalL1Options = raw;
   if (opts.enabled === false) return undefined;
   if (!opts.experimental) {
-    throw new Error(
-      'localL1 is experimental in v2.1. Pass `localL1: { enabled: true, experimental: true }` to opt in.',
-    );
+    throw new Error('localL1 is experimental. Pass `localL1: { experimental: true }` to opt in.');
   }
 
   // Default L1 ttl: min(primaryTtl * 0.1, 5000), with 100ms floor.
-  // If primary ttl is unset, default to 5000.
-  // Hard cap: L1 ttl cannot exceed primary ttl.
-  const requestedTtl = opts.ttl ?? Math.min((primary.ttl ?? Infinity) * 0.1, DEFAULT_L1_TTL_MS);
-  const cappedTtl = primary.ttl !== undefined ? Math.min(requestedTtl, primary.ttl) : requestedTtl;
-  const ttl = Math.max(100, Math.floor(cappedTtl));
+  // An unset or zero primary ttl means no expiration, so default to 5000.
+  // Population also caps each entry at its remaining primary lifetime.
+  const primaryTtl = primary.ttl || Infinity;
+  const requestedTtl = opts.ttl ?? Math.min(primaryTtl * 0.1, DEFAULT_L1_TTL_MS);
+  const ttl = Math.max(100, Math.floor(Math.min(requestedTtl, primaryTtl)));
 
   const methods =
     opts.methods === undefined
@@ -772,6 +770,9 @@ export class LRUCacheClustered<K extends {} = string, V extends {} = {}> {
   }
 
   async #dispatchWithMeta<T>(payload: ExecPayload, failsafe: 'resolve' | 'reject'): Promise<LocalResponse<T>> {
+    // destroy() releases subscriptions. Reusing the instance must restore
+    // invalidation delivery before another read can warm its local cache.
+    if (payload.op !== 'destroy' && payload.op !== 'init') this.#installL1Subscription();
     const ttlStart = payload.includeTTL ? globalThis.performance.now() : undefined;
     const request = { ...payload, cacheOptions: this.#lruOptions } as ExecPayload;
     if (cluster.isPrimary) {

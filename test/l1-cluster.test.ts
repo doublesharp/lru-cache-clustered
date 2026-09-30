@@ -116,6 +116,53 @@ void test(
   },
 );
 
+void test('a reused worker cache restores IPC invalidations after destroy', { timeout: 15_000 }, async () => {
+  const options = { namespace: 'l1-worker-reused', max: 100, ttl: 60_000 };
+  const primary = new LRUCacheClustered<string, string>(options);
+  setupHarness();
+  const worker = await forkWorker();
+  try {
+    await worker.send('openLocal', { ...options, localL1: { experimental: true, ttl: 5000 } });
+    await primary.set('key', 'before');
+    assert.equal(await worker.send('destroyLocal', { namespace: options.namespace }), true);
+    await primary.set('key', 'recreated');
+    const read = () =>
+      worker.send<{ value: string; stats: L1Stats }>('readLocal', { namespace: options.namespace, key: 'key' });
+    assert.equal((await read()).value, 'recreated');
+    const warm = await read();
+    assert.equal(warm.stats.hits, 1);
+    await primary.set('key', 'updated');
+    const invalidated = await worker.send<L1Stats>('statsLocal', { namespace: options.namespace });
+    assert.equal(invalidated.size, 0);
+    assert.equal((await read()).value, 'updated');
+  } finally {
+    await worker.stop();
+    await primary.destroy();
+  }
+});
+
+void test(
+  'failed worker initialization does not subscribe an unreachable L1 instance',
+  { timeout: 15_000 },
+  async () => {
+    const options = { namespace: 'l1-worker-failed-init', max: 100 };
+    const primary = new LRUCacheClustered(options);
+    setupHarness();
+    const worker = await forkWorker();
+    try {
+      const result = await worker.send<{ rejected: boolean; subscriptions: number }>('probeFailedInitSubscription', {
+        ...options,
+        max: 10,
+        localL1: { experimental: true },
+      });
+      assert.deepEqual(result, { rejected: true, subscriptions: 0 });
+    } finally {
+      await worker.stop();
+      await primary.destroy();
+    }
+  },
+);
+
 void test('worker constructor ready installs local L1 after init', { timeout: 15_000 }, async () => {
   new LRUCacheClustered({ namespace: 'l1-worker-ready', max: 100, ttl: 60_000 });
   setupHarness();

@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import cluster from 'node:cluster';
+import { performance } from 'node:perf_hooks';
 import { getOrCreateCache, caches, handleRequest, installClusterListener, stats, versions } from '../src/primary.ts';
 import { SOURCE, deserializeError, serializeError, type Request, type Stats } from '../src/messages.ts';
 
@@ -575,7 +576,9 @@ void test('handleRequest max setter rebuilds the cache, preserving entries', () 
   assert.equal((d('allowStale') as { value: unknown }).value, true);
 });
 
-void test('handleRequest max setter preserves per-entry remaining TTL', async () => {
+void test('handleRequest max setter preserves per-entry remaining TTL', (t) => {
+  t.mock.method(performance, 'now', () => 10_000);
+  t.mock.method(Date, 'now', () => 100_000);
   caches.clear();
   stats.clear();
   const ns = 'rebuild-ttl';
@@ -583,16 +586,15 @@ void test('handleRequest max setter preserves per-entry remaining TTL', async ()
     handleRequest({ id: 'r', namespace: ns, source: SOURCE, op, ...extra } as Request);
 
   d('init', { options: { max: 10 } });
-  d('set', { key: 'k', value: 'v', ttl: 50 });
-  await new Promise((r) => setTimeout(r, 20));
+  // Restore an entry that is already two seconds into its five-second TTL.
+  d('load', { entries: [['k', { value: 'v', ttl: 5000, start: 98_000 }]] });
   const before = (d('getRemainingTTL', { key: 'k' }) as { value: number }).value;
 
   d('max', { value: 20 });
   const after = (d('getRemainingTTL', { key: 'k' }) as { value: number }).value;
 
-  assert.ok(before > 0);
-  assert.ok(after > 0, `expected positive ttl after rebuild, got ${after}`);
-  assert.ok(after <= before, `expected ttl to keep ticking down (${after} <= ${before})`);
+  assert.equal(before, 3000);
+  assert.equal(after, 3000, 'resizing must preserve the original expiration');
 });
 
 void test('handleRequest max setter preserves all SerializableLruOptions', () => {

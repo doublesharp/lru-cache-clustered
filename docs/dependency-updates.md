@@ -1,3 +1,28 @@
+# Dependency update, September 30, 2026
+
+Updated compatible releases within the existing major versions. The Node.js 22 runtime minimum, seven-day release waiting policy, and `tsup>esbuild` override remain in place.
+
+| Package                            | Previous | Updated | Published, UTC           |
+| ---------------------------------- | -------- | ------- | ------------------------ |
+| `@types/node`                      | 25.9.5   | 25.9.8  | 2026-09-19T00:11:55.379Z |
+| `@typescript-eslint/eslint-plugin` | 8.69.0   | 8.70.1  | 2026-09-21T17:08:32.480Z |
+| `@typescript-eslint/parser`        | 8.69.0   | 8.70.1  | 2026-09-21T17:09:44.706Z |
+| `eslint`                           | 10.10.0  | 10.11.0 | 2026-09-18T20:15:36.485Z |
+| `knip`                             | 6.34.0   | 6.38.0  | 2026-09-23T10:41:04.033Z |
+| `lru-cache`                        | 11.5.2   | 11.5.3  | 2026-09-18T23:46:33.023Z |
+| `prettier`                         | 3.9.6    | 3.9.9   | 2026-09-23T06:31:34.693Z |
+| `tsx`                              | 4.23.13  | 4.23.15 | 2026-09-20T07:22:17.792Z |
+
+All 78 newly resolved package-version entries, including optional platform packages, were checked against npm publication timestamps. Each predates the seven-day cutoff of `2026-09-23T20:22:48.884Z`. Frozen lockfile installs use these reviewed versions.
+
+The refresh also updates transitive `brace-expansion` from 1.1.18 to 1.1.21 and from 5.0.9 to 5.0.12. These patches address the [quadratic expansion advisory](https://github.com/juliangruber/brace-expansion/security/advisories/GHSA-q2hr-2g5m-vwhr), [recursive expansion advisory](https://github.com/juliangruber/brace-expansion/security/advisories/GHSA-rgw5-rvv9-x895), and [parser stack-exhaustion advisory](https://github.com/juliangruber/brace-expansion/security/advisories/GHSA-6j4f-fj2g-mc7p) in development tooling. `pnpm audit` reported four high and two moderate findings before the update and zero findings after it.
+
+Major updates to TypeScript, c8, lint-staged, size-limit, and Node type definitions were left for separate compatibility work. More recent TypeScript ESLint, Knip, and Node type releases were excluded by the waiting policy. The existing optional `eslint-plugin-import` peer warning remains; lint uses `eslint-plugin-import-x` as configured.
+
+Publication dates come from the [npm registry](https://registry.npmjs.org/). Verification and runtime results belong to this update, not to future dependency resolutions.
+
+---
+
 # Dependency update, September 11, 2026
 
 Selected compatible stable releases published on or before **September 4, 2026 at 17:02:47 UTC**. Existing major versions and the Node.js 22 minimum are unchanged.

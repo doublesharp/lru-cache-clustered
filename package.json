@@ -1,6 +1,6 @@
 {
   "name": "@0xdoublesharp/lru-cache-clustered",
-  "version": "2.1.1",
+  "version": "2.1.2",
   "description": "Shared in-memory LRU caches for Node.js cluster workers, with atomic counters, coordinated fetches, and optional local caching.",
   "type": "module",
   "sideEffects": false,
@@ -45,7 +45,7 @@
     "example:l1": "node --import tsx examples/clustered-l1-controls-server.ts",
     "example:multilayer": "node --import tsx examples/clustered-multilayer-redis-server.ts",
     "test": "node --import tsx --test test/*.test.ts",
-    "test:coverage": "c8 --reporter=text --reporter=lcov --include='src/**/*.ts' pnpm test",
+    "test:coverage": "c8 --100 --reporter=text --reporter=lcov --include='src/**/*.ts' pnpm test",
     "lint": "eslint --no-error-on-unmatched-pattern src test examples",
     "format": "prettier --write src test examples",
     "typecheck": "tsc --noEmit",
@@ -64,13 +64,13 @@
     {
       "name": "esm",
       "path": "dist/index.js",
-      "limit": "7 KB",
+      "limit": "8 KB",
       "brotli": true
     },
     {
       "name": "cjs",
       "path": "dist/index.cjs",
-      "limit": "7 KB",
+      "limit": "8 KB",
       "brotli": true
     }
   ],

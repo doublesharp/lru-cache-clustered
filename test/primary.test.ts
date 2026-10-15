@@ -1055,7 +1055,7 @@ void test('handleRequest mDelete validates all keys before mutating', () => {
   stats.clear();
   const ns = 'mdelete-validate-before-mutate';
   handleRequest({ id: 'init', namespace: ns, source: SOURCE, op: 'init', options: { max: 4 } });
-  handleRequest({ id: 'set', namespace: ns, source: SOURCE, op: 'set', key: 'a', value: 1 });
+  const set = handleRequest({ id: 'set', namespace: ns, source: SOURCE, op: 'set', key: 'a', value: 1 });
 
   const r = handleRequest({
     id: 'bad-mdelete',
@@ -1068,7 +1068,7 @@ void test('handleRequest mDelete validates all keys before mutating', () => {
   assert.equal(r.ok, false);
   assert.equal(caches.get(ns)?.get('a'), 1);
   const get = handleRequest({ id: 'get', namespace: ns, source: SOURCE, op: 'get', key: 'a' });
-  assert.equal(get.ok && get.version, 1);
+  assert.equal(get.ok && get.version, set.ok && set.version);
 });
 
 void test('handleRequest setIfAbsent only counts sets when actually set', () => {
@@ -1177,12 +1177,13 @@ void test('setIfAbsent does not refresh TTL via updateAgeOnHas on existing key',
   // distinguishable from the original (~10000 vs ~9950).
   await new Promise((r) => setTimeout(r, 50));
 
+  const ttlBefore = (d('getRemainingTTL', { key: 'k' }) as { value: number }).value;
   const result = (d('setIfAbsent', { key: 'k', value: 'v1' }) as { value: unknown }).value;
   assert.equal(result, false, 'existing key should reject the write');
 
   const ttlAfter = (d('getRemainingTTL', { key: 'k' }) as { value: number }).value;
   assert.ok(ttlAfter < 10_000, `expected ttl to have decreased from initial 10_000, got ${ttlAfter}`);
-  assert.ok(ttlAfter >= 9_900, `expected ttl to remain near 9_950 (no refresh), got ${ttlAfter}`);
+  assert.ok(ttlAfter <= ttlBefore + 2, `expected ttl not to refresh from ${ttlBefore}, got ${ttlAfter}`);
 });
 
 void test('incr does not refresh TTL via updateAgeOnHas/updateAgeOnGet on existing counter', async () => {
@@ -1198,12 +1199,13 @@ void test('incr does not refresh TTL via updateAgeOnHas/updateAgeOnGet on existi
   // Sleep enough that a refreshed age would push ttl back to the original.
   await new Promise((r) => setTimeout(r, 50));
 
+  const ttlBefore = (d('getRemainingTTL', { key: 'k' }) as { value: number }).value;
   const next = (d('incr', { key: 'k' }) as { value: unknown }).value;
   assert.equal(next, 1);
 
   const ttlAfter = (d('getRemainingTTL', { key: 'k' }) as { value: number }).value;
   assert.ok(ttlAfter < 10_000, `expected ttl to have decreased from initial 10_000, got ${ttlAfter}`);
-  assert.ok(ttlAfter >= 9_900, `expected ttl to remain near 9_950 (no refresh), got ${ttlAfter}`);
+  assert.ok(ttlAfter <= ttlBefore + 2, `expected ttl not to refresh from ${ttlBefore}, got ${ttlAfter}`);
 });
 
 void test('serializeError detects self-referential cause cycles', () => {
@@ -1275,22 +1277,28 @@ void test('mutating ops bump per-namespace version monotonically', async () => {
   assert.equal(init.ok && init.version, 0);
 
   const set1 = handleRequest({ id: '2', namespace, source: 'lcfcap', op: 'set', key: 'a', value: 1 });
-  assert.equal(set1.ok && set1.version, 1);
+  assert.ok(set1.ok && typeof set1.version === 'number' && set1.version > 0);
 
   const get1 = handleRequest({ id: '3', namespace, source: 'lcfcap', op: 'get', key: 'a' });
   // Reads do not bump but they do report current version
-  assert.equal(get1.ok && get1.version, 1);
+  assert.equal(get1.ok && get1.version, set1.ok && set1.version);
 
   const del1 = handleRequest({ id: '4', namespace, source: 'lcfcap', op: 'delete', key: 'a' });
-  // Delete-of-present bumps to 2
-  assert.equal(del1.ok && del1.version, 2);
+  // Delete-of-present advances the shared mutation sequence.
+  assert.ok(
+    del1.ok &&
+      set1.ok &&
+      typeof del1.version === 'number' &&
+      typeof set1.version === 'number' &&
+      del1.version > set1.version,
+  );
 
   const del2 = handleRequest({ id: '5', namespace, source: 'lcfcap', op: 'delete', key: 'a' });
-  // Delete-of-missing does NOT bump; stays at 2
-  assert.equal(del2.ok && del2.version, 2);
+  // Delete-of-missing without a claim does not bump.
+  assert.equal(del2.ok && del2.version, del1.ok && del1.version);
 });
 
-void test('versions are per-namespace, not global', async () => {
+void test('namespace versions track global mutations while untouched namespaces start at zero', async () => {
   const { handleRequest } = await import('../src/primary.ts');
   const a = 'ns-a';
   const b = 'ns-b';
@@ -1298,23 +1306,23 @@ void test('versions are per-namespace, not global', async () => {
   handleRequest({ id: '2', namespace: b, source: 'lcfcap', op: 'init', options: { max: 4 } });
   const r1 = handleRequest({ id: '3', namespace: a, source: 'lcfcap', op: 'set', key: 'x', value: 1 });
   const r2 = handleRequest({ id: '4', namespace: b, source: 'lcfcap', op: 'get', key: 'x' });
-  assert.equal(r1.ok && r1.version, 1);
+  assert.ok(r1.ok && typeof r1.version === 'number' && r1.version > 0);
   assert.equal(r2.ok && r2.version, 0);
 });
 
 void test('init response value includes the current namespace version', async () => {
   const { handleRequest } = await import('../src/primary.ts');
   const namespace = 'init-version';
-  // Bump twice on this namespace to confirm we read this namespace's version
+  // Bump twice to confirm init reports the latest mutation in this namespace.
   handleRequest({ id: 'a', namespace, source: 'lcfcap', op: 'init', options: { max: 4 } });
   handleRequest({ id: 'b', namespace, source: 'lcfcap', op: 'set', key: 'x', value: 1 });
-  handleRequest({ id: 'c', namespace, source: 'lcfcap', op: 'set', key: 'y', value: 2 });
-  // A "second init" (e.g. a worker joining late) should see version=2
+  const lastSet = handleRequest({ id: 'c', namespace, source: 'lcfcap', op: 'set', key: 'y', value: 2 });
+  // A second init, such as a worker joining late, reads the latest version.
   const r = handleRequest({ id: 'd', namespace, source: 'lcfcap', op: 'init', options: { max: 4 } });
   assert.equal(r.ok, true);
   if (r.ok) {
     const value = r.value as { namespace: string; isNew: boolean; max: number; version: number };
-    assert.equal(value.version, 2);
+    assert.equal(value.version, lastSet.ok && lastSet.version);
     assert.equal(value.namespace, namespace);
     assert.equal(value.isNew, false);
   }

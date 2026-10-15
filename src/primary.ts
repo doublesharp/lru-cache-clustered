@@ -2,6 +2,7 @@ import cluster from 'node:cluster';
 import type { Worker } from 'node:cluster';
 import Debug from 'debug';
 import { LRUCache } from 'lru-cache';
+import { emitInvalidation } from './invalidation.js';
 import {
   DEBUG_PREFIX,
   SOURCE,
@@ -33,7 +34,9 @@ type DispatchContext = {
 };
 
 type FetchLock = {
-  token: string;
+  token?: string;
+  generation: string;
+  followers: Map<string, number | undefined>;
   ownerWorkerId?: number;
   claimedAt: number;
 };
@@ -53,6 +56,8 @@ type PrimaryState = {
   versions: Map<string, number>;
   clusterListenerInstalled: boolean;
   nextFetchToken: number;
+  nextMutationVersion: number;
+  activeEvictions?: { namespace: string; keys: NonNullish[] };
 };
 
 // The scoped and legacy package names can coexist during the migration window.
@@ -66,6 +71,7 @@ const primaryState = ((globalThis as Record<PropertyKey, unknown>)[STATE_KEY] ??
   versions: new Map<string, number>(),
   clusterListenerInstalled: false,
   nextFetchToken: 0,
+  nextMutationVersion: 0,
 }) as PrimaryState;
 
 export const caches = primaryState.caches;
@@ -78,7 +84,8 @@ export function getNamespaceVersion(namespace: string): number {
 }
 
 function bumpNamespaceVersion(namespace: string): number {
-  const next = (primaryState.versions.get(namespace) ?? 0) + 1;
+  const next = (primaryState.nextMutationVersion ?? 0) + 1;
+  primaryState.nextMutationVersion = next;
   primaryState.versions.set(namespace, next);
   return next;
 }
@@ -191,6 +198,12 @@ function getFetchNamespaceLocks(namespace: string): Map<NonNullish, FetchLock> {
   return locks;
 }
 
+function supersedeFetch(namespace: string, key: NonNullish): boolean {
+  const removed = fetchLocks.get(namespace)?.delete(key) ?? false;
+  cleanupFetchNamespaceLocks(namespace);
+  return removed;
+}
+
 function cleanupFetchNamespaceLocks(namespace: string): void {
   if (fetchLocks.get(namespace)?.size === 0) fetchLocks.delete(namespace);
 }
@@ -198,9 +211,11 @@ function cleanupFetchNamespaceLocks(namespace: string): void {
 function releaseFetchLocksForWorker(workerId: number): void {
   for (const [namespace, locks] of fetchLocks) {
     for (const [key, lock] of locks) {
-      if (lock.ownerWorkerId === workerId) {
-        locks.delete(key);
+      for (const [requestId, owner] of lock.followers) {
+        if (owner === workerId) lock.followers.delete(requestId);
       }
+      if (lock.ownerWorkerId === workerId) lock.token = undefined;
+      if (!lock.token && lock.followers.size === 0) locks.delete(key);
     }
     cleanupFetchNamespaceLocks(namespace);
   }
@@ -209,8 +224,12 @@ function releaseFetchLocksForWorker(workerId: number): void {
 function buildCache(options: SerializableLruOptions, s: Stats): AnyCache {
   const cacheOptions = {
     ...options,
-    dispose: (_value: NonNullish, _key: NonNullish, reason: LRUCache.DisposeReason) => {
-      if (reason === 'evict') s.evictions += 1;
+    dispose: (_value: NonNullish, key: NonNullish, reason: LRUCache.DisposeReason) => {
+      if (reason === 'evict') {
+        s.evictions += 1;
+        supersedeFetch(s.namespace, key);
+        if (primaryState.activeEvictions?.namespace === s.namespace) primaryState.activeEvictions.keys.push(key);
+      }
     },
   } as SerializableLruOptions & {
     dispose: (_value: NonNullish, _key: NonNullish, reason: LRUCache.DisposeReason) => void;
@@ -259,8 +278,10 @@ export function dispatchOp(namespace: string, payload: ExecPayload, context: Dis
       return existed;
     }
     case 'get': {
-      const cache = getCacheForPayload(namespace, payload);
-      const value = cache.get(requireNonNullish('cache key', payload.key));
+      const key = requireNonNullish('cache key', payload.key);
+      const cache = payload.existingOnly ? caches.get(namespace) : getCacheForPayload(namespace, payload);
+      if (!cache) return undefined;
+      const value = cache.get(key);
       const s = getStats(namespace);
       if (value !== undefined) s.hits += 1;
       else s.misses += 1;
@@ -268,11 +289,13 @@ export function dispatchOp(namespace: string, payload: ExecPayload, context: Dis
     }
     case 'set': {
       const cache = getCacheForPayload(namespace, payload);
+      const key = requireNonNullish('cache key', payload.key);
       cache.set(
-        requireNonNullish('cache key', payload.key),
+        key,
         requireNonNullish('cache value', payload.value),
         buildSetOptions({ ttl: payload.ttl, size: payload.size }),
       );
+      supersedeFetch(namespace, key);
       getStats(namespace).sets += 1;
       bumpNamespaceVersion(namespace);
       return true;
@@ -289,17 +312,18 @@ export function dispatchOp(namespace: string, payload: ExecPayload, context: Dis
         requireNonNullish('cache value', payload.value),
         buildSetOptions({ ttl: payload.ttl, size: payload.size }),
       );
+      supersedeFetch(namespace, key);
       getStats(namespace).sets += 1;
       bumpNamespaceVersion(namespace);
       return true;
     }
     case 'delete': {
       const cache = getCacheForPayload(namespace, payload);
-      const deleted = cache.delete(requireNonNullish('cache key', payload.key));
-      if (deleted) {
-        getStats(namespace).deletes += 1;
-        bumpNamespaceVersion(namespace);
-      }
+      const key = requireNonNullish('cache key', payload.key);
+      const deleted = cache.delete(key);
+      const superseded = supersedeFetch(namespace, key);
+      if (deleted) getStats(namespace).deletes += 1;
+      if (deleted || superseded) bumpNamespaceVersion(namespace);
       return deleted;
     }
     case 'has':
@@ -310,6 +334,7 @@ export function dispatchOp(namespace: string, payload: ExecPayload, context: Dis
       return getCacheForPayload(namespace, payload).getRemainingTTL(requireNonNullish('cache key', payload.key));
     case 'clear':
       getCacheForPayload(namespace, payload).clear();
+      fetchLocks.delete(namespace);
       bumpNamespaceVersion(namespace);
       return undefined;
     case 'mGet': {
@@ -330,18 +355,24 @@ export function dispatchOp(namespace: string, payload: ExecPayload, context: Dis
         value: requireNonNullish('cache value', value),
         entryOpts,
       }));
-      for (const { key, value, entryOpts } of entries) {
-        cache.set(
-          key,
-          value,
-          buildSetOptions({
-            ttl: entryOpts?.ttl ?? payload.ttl,
-            size: entryOpts?.size ?? payload.size,
-          }),
-        );
-        s.sets += 1;
+      let changed = false;
+      try {
+        for (const { key, value, entryOpts } of entries) {
+          cache.set(
+            key,
+            value,
+            buildSetOptions({
+              ttl: entryOpts?.ttl ?? payload.ttl,
+              size: entryOpts?.size ?? payload.size,
+            }),
+          );
+          supersedeFetch(namespace, key);
+          changed = true;
+          s.sets += 1;
+        }
+      } finally {
+        if (changed || entries.length === 0) bumpNamespaceVersion(namespace);
       }
-      bumpNamespaceVersion(namespace);
       return undefined;
     }
     case 'mDelete': {
@@ -350,6 +381,7 @@ export function dispatchOp(namespace: string, payload: ExecPayload, context: Dis
       const keys = payload.keys.map((key) => requireNonNullish('cache key', key));
       for (const key of keys) {
         if (cache.delete(key)) s.deletes += 1;
+        supersedeFetch(namespace, key);
       }
       bumpNamespaceVersion(namespace);
       return undefined;
@@ -370,8 +402,14 @@ export function dispatchOp(namespace: string, payload: ExecPayload, context: Dis
         requireNonNullish('cache value', safeEntry.value);
         return [safeKey, entry] as [NonNullish, LRUCache.Entry<NonNullish>];
       });
-      cache.load(entries);
-      bumpNamespaceVersion(namespace);
+      // load() clears first and can then fail on a later entry's size.
+      // Publication must cover both that clear and any entries already loaded.
+      fetchLocks.delete(namespace);
+      try {
+        cache.load(entries);
+      } finally {
+        bumpNamespaceVersion(namespace);
+      }
       return undefined;
     }
     case 'size':
@@ -414,39 +452,60 @@ export function dispatchOp(namespace: string, payload: ExecPayload, context: Dis
             },
       );
       cache.set(key, next, setOpts);
+      supersedeFetch(namespace, key);
       getStats(namespace).sets += 1;
       bumpNamespaceVersion(namespace);
       return next;
     }
     case 'fetchClaim': {
-      const cache = getCacheForPayload(namespace, payload);
       const key = requireNonNullish('cache key', payload.key);
+      const existing = fetchLocks.get(namespace)?.get(key);
+      // A follower belongs to the generation it first observed. Explicit
+      // mutation deletes that generation; never recreate a namespace or claim
+      // fresh leadership on behalf of the old request.
+      if (payload.generation !== undefined && existing?.generation !== payload.generation) {
+        const value = caches.get(namespace)?.get(key);
+        if (value !== undefined) return { kind: 'value', value };
+        throw new Error('Fetch was superseded by a cache mutation and no current value remains');
+      }
+      const cache = getCacheForPayload(namespace, payload);
       const now = Date.now();
       if (!payload.forceRefresh) {
         const value = cache.get(key);
         const s = getStats(namespace);
         if (value !== undefined) {
+          if (payload.requestId) existing?.followers.delete(payload.requestId);
+          if (existing && !existing.token && existing.followers.size === 0) {
+            fetchLocks.get(namespace)?.delete(key);
+            cleanupFetchNamespaceLocks(namespace);
+          }
           s.hits += 1;
           return { kind: 'value', value };
         }
         s.misses += 1;
-        const existing = fetchLocks.get(namespace)?.get(key);
-        // Treat a stale lock as gone, so a new caller can take leadership
-        // and unstick followers when a previous leader hung without exiting.
-        if (existing && now - existing.claimedAt < FETCH_LEASE_MS) {
-          return { kind: 'follower' };
+        // Ordinary failure/exit/lease expiry allows takeover within the same
+        // generation, while mutations revoke the entire group.
+        if (existing?.token && now - existing.claimedAt < FETCH_LEASE_MS) {
+          if (payload.requestId) existing.followers.set(payload.requestId, context.workerId);
+          return payload.requestId ? { kind: 'follower', generation: existing.generation } : { kind: 'follower' };
         }
       }
       const token = `fetch-${++primaryState.nextFetchToken}`;
-      getFetchNamespaceLocks(namespace).set(key, { token, ownerWorkerId: context.workerId, claimedAt: now });
+      getFetchNamespaceLocks(namespace).set(key, {
+        token,
+        generation: existing?.generation ?? token,
+        followers: existing?.followers ?? new Map<string, number | undefined>(),
+        ownerWorkerId: context.workerId,
+        claimedAt: now,
+      });
       return { kind: 'leader', token };
     }
     case 'fetchStore': {
-      const cache = getCacheForPayload(namespace, payload);
       const key = requireNonNullish('cache key', payload.key);
       const locks = fetchLocks.get(namespace);
       const lock = locks?.get(key);
       if (!lock || lock.token !== payload.token) return false;
+      const cache = getCacheForPayload(namespace, payload);
       cache.set(
         key,
         requireNonNullish('cache value', payload.value),
@@ -463,9 +522,20 @@ export function dispatchOp(namespace: string, payload: ExecPayload, context: Dis
       const locks = fetchLocks.get(namespace);
       const lock = locks?.get(key);
       if (!lock || lock.token !== payload.token) return false;
-      locks?.delete(key);
+      lock.token = undefined;
+      if (lock.followers.size === 0) locks?.delete(key);
       cleanupFetchNamespaceLocks(namespace);
       return true;
+    }
+    case 'fetchRelease': {
+      const key = requireNonNullish('cache key', payload.key);
+      const locks = fetchLocks.get(namespace);
+      const lock = locks?.get(key);
+      if (!lock || (payload.generation !== undefined && lock.generation !== payload.generation)) return false;
+      const removed = lock.followers.delete(payload.requestId);
+      if (!lock.token && lock.followers.size === 0) locks?.delete(key);
+      cleanupFetchNamespaceLocks(namespace);
+      return removed;
     }
     case 'max': {
       const cache = getCacheForPayload(namespace, payload);
@@ -538,11 +608,29 @@ function broadcastInvalidation(msg: InvalidationPush): void {
   for (const worker of Object.values(cluster.workers ?? {})) {
     if (!worker || !worker.isConnected()) continue;
     try {
-      worker.send(msg);
+      worker.send(msg, (error: Error | null) => {
+        if (error) debug(`l1 broadcast to worker ${worker.id} failed: %s`, error);
+      });
     } catch (err) {
       debug(`l1 broadcast to worker ${worker.id} failed: %s`, err);
     }
   }
+}
+
+const EVICTING_OPS: ReadonlySet<string> = new Set([
+  'set',
+  'setIfAbsent',
+  'mSet',
+  'load',
+  'incr',
+  'decr',
+  'fetchStore',
+  'max',
+]);
+
+function publishInvalidation(msg: InvalidationPush): void {
+  emitInvalidation(msg);
+  broadcastInvalidation(msg);
 }
 
 export function dispatchAndBroadcast(
@@ -551,13 +639,32 @@ export function dispatchAndBroadcast(
   context: DispatchContext = {},
 ): DispatchResult<unknown> {
   const before = getNamespaceVersion(namespace);
-  const value = dispatchOp(namespace, payload, context);
-  const after = getNamespaceVersion(namespace);
-  if (after !== before) {
-    const msg = buildInvalidation(namespace, payload, after);
-    if (msg) broadcastInvalidation(msg);
+  const capture = EVICTING_OPS.has(payload.op) ? { namespace, keys: [] as NonNullish[] } : undefined;
+  const previousCapture = primaryState.activeEvictions;
+  primaryState.activeEvictions = capture;
+  let value: unknown;
+  let after: number;
+  try {
+    value = dispatchOp(namespace, payload, context);
+  } finally {
+    primaryState.activeEvictions = previousCapture;
+    after = getNamespaceVersion(namespace);
+    if (after !== before) {
+      const msg = buildInvalidation(namespace, payload, after);
+      if (msg) publishInvalidation(msg);
+      // A single-key write can evict other entries. Fence those keys too,
+      // without clearing unrelated hot L1 entries in the namespace.
+      if (msg?.push !== 'l1:invalidate-namespace') {
+        for (const key of capture?.keys ?? []) {
+          publishInvalidation({ source: SOURCE, push: 'l1:invalidate', namespace, key, version: after });
+        }
+      }
+    }
+    // Keep the final version in this response and push, then release metadata.
+    if (payload.op === 'destroy') versions.delete(namespace);
   }
   const result: DispatchResult<unknown> = { value, version: after };
+  if (capture?.keys.length) result.evictedKeys = capture.keys;
   if (payload.includeTTL) {
     const keys = payload.op === 'mGet' ? payload.keys : 'key' in payload ? [payload.key] : [];
     const cache = caches.get(namespace);
@@ -602,6 +709,9 @@ export function installClusterListener(): void {
   if (primaryState.clusterListenerInstalled) return;
   primaryState.clusterListenerInstalled = true;
 
+  cluster.on('disconnect', (worker: Worker) => {
+    releaseFetchLocksForWorker(worker.id);
+  });
   cluster.on('exit', (worker: Worker) => {
     releaseFetchLocksForWorker(worker.id);
   });
@@ -628,7 +738,9 @@ function attachWorkerHandler(worker: Worker): void {
     // every other worker with it.
     if (!worker.isConnected()) return;
     try {
-      worker.send(response);
+      worker.send(response, (error: Error | null) => {
+        if (error) debug(`worker ${worker.id} send failed (likely disconnected): %s`, error);
+      });
     } catch (err) {
       debug(`worker ${worker.id} send failed (likely disconnected): %s`, err);
     }

@@ -12,6 +12,8 @@ export type L1Stats = {
   ipcAvoided: number;
 };
 
+export type L1Read = { version: number; cancelled: boolean; release: () => void };
+
 type L1Envelope<V> = {
   value: V;
   version: number;
@@ -90,15 +92,15 @@ const FRESH_STATS = (): L1Stats => ({
 });
 
 // Per-instance L1 cache. One LocalL1Cache per LRUCacheClustered.
-// Stores L1Envelope<V> so we can stamp each entry with the namespace version
-// at the moment it was populated; later reads compare against the latest
-// invalidation version we've observed for the namespace.
+// Namespace clears establish a version floor. Key invalidations remove only
+// their entry and fence pending fills; releasing each fill reclaims its metadata.
 //
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type
 export class LocalL1Cache<V extends {} = {}> {
   readonly #cache: LRUCache<string, L1Envelope<V>>;
   readonly #ttl?: number;
   #latestSeen = 0;
+  readonly #pending = new Map<string, Set<L1Read>>();
   readonly #stats = FRESH_STATS();
   readonly #emit: L1EmitFn;
 
@@ -160,8 +162,15 @@ export class LocalL1Cache<V extends {} = {}> {
     return entry.value;
   }
 
-  set(encodedKey: string, value: V, version: number, ttl?: number, eventKey: unknown = encodedKey): void {
-    if (version < this.#latestSeen) {
+  set(
+    encodedKey: string,
+    value: V,
+    version: number,
+    ttl?: number,
+    eventKey: unknown = encodedKey,
+    read?: L1Read,
+  ): void {
+    if (version < this.#latestSeen || (read && (read.cancelled || version < read.version))) {
       // Don't store an entry already known to be stale.
       return;
     }
@@ -173,16 +182,57 @@ export class LocalL1Cache<V extends {} = {}> {
     this.#emit('set', { key: eventKey, version });
   }
 
-  delete(encodedKey: string, eventKey: unknown = encodedKey, emit = true): void {
-    if (this.#cache.delete(encodedKey)) {
+  trackRead(encodedKey: string): L1Read {
+    let pending = this.#pending.get(encodedKey);
+    if (!pending) {
+      pending = new Set();
+      this.#pending.set(encodedKey, pending);
+    }
+    const read: L1Read = {
+      version: this.#latestSeen,
+      cancelled: false,
+      release: () => {
+        pending.delete(read);
+        if (pending.size === 0 && this.#pending.get(encodedKey) === pending) this.#pending.delete(encodedKey);
+      },
+    };
+    pending.add(read);
+    return read;
+  }
+
+  delete(encodedKey: string, eventKey: unknown = encodedKey, emit = true, version?: number): void {
+    for (const read of this.#pending.get(encodedKey) ?? []) {
+      if (version === undefined) read.cancelled = true;
+      else read.version = Math.max(read.version, version);
+    }
+    const entry = this.#cache.peek(encodedKey, { allowStale: true });
+    if (entry && (version === undefined || entry.version < version) && this.#cache.delete(encodedKey)) {
       this.#stats.invalidations += 1;
       if (emit) this.#emit('invalidate', { key: eventKey, reason: 'self' });
     }
   }
 
-  clear(emit = true): void {
-    if (this.#cache.size > 0) this.#stats.invalidations += 1;
-    this.#cache.clear();
+  clear(emit = true, version?: number): void {
+    if (version === undefined) {
+      for (const pending of this.#pending.values()) {
+        for (const read of pending) read.cancelled = true;
+      }
+    } else {
+      this.advanceLatestSeen(version);
+    }
+    let invalidated = false;
+    if (version === undefined) {
+      invalidated = this.#cache.size > 0;
+      this.#cache.clear();
+    } else {
+      for (const [key, entry] of this.#cache.entries()) {
+        if (entry.version < version) {
+          this.#cache.delete(key);
+          invalidated = true;
+        }
+      }
+    }
+    if (invalidated) this.#stats.invalidations += 1;
     if (emit) this.#emit('invalidate', { key: '*', reason: 'clear' });
   }
 
@@ -200,7 +250,7 @@ export class LocalL1Cache<V extends {} = {}> {
 
   // For tests / explicit teardown.
   destroy(): void {
-    this.#cache.clear();
+    this.clear(false);
   }
 
   #setOptions(ttl: number | undefined): { ttl: number } | undefined | false {

@@ -32,6 +32,23 @@ void test('sendToPrimary resolves with value on matching response', async () => 
   assert.equal(await p, 'hello');
 });
 
+void test("independent IPC clients cannot consume one another's responses", async () => {
+  const fake = makeFakeProcess();
+  const a = createIpcClient(fake);
+  const b = createIpcClient(fake);
+  const options = { namespace: 'a', timeout: 1000, failsafe: 'reject' as const };
+  const first = a.sendToPrimary(options, { op: 'get', key: 'key' });
+  const second = b.sendToPrimary({ ...options, namespace: 'b' }, { op: 'get', key: 'key' });
+  const [firstRequest, secondRequest] = fake.sent as Array<{ id: string }>;
+  assert.ok(firstRequest);
+  assert.ok(secondRequest);
+  assert.notEqual(firstRequest.id, secondRequest.id);
+  assert.ok(Number(secondRequest.id) > Number(firstRequest.id), 'request IDs remain monotonically increasing');
+  fake.deliver({ source: SOURCE, id: secondRequest.id, ok: true, value: 'B' });
+  fake.deliver({ source: SOURCE, id: firstRequest.id, ok: true, value: 'A' });
+  assert.deepEqual(await Promise.all([first, second]), ['A', 'B']);
+});
+
 void test('sendToPrimary rejects on ok=false', async () => {
   const fake = makeFakeProcess();
   const client = createIpcClient({ send: fake.send.bind(fake), on: fake.on.bind(fake) });

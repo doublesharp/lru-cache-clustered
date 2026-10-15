@@ -313,3 +313,31 @@ void test('local peek can return stale without deleting the entry or treating it
   assert.equal(l1.get('s:a', 'a', 'has'), undefined);
   assert.equal(l1.stats().hits, 1);
 });
+
+void test('delayed invalidations preserve entries populated at a newer version', () => {
+  const l1 = new LocalL1Cache({ max: 10 });
+  l1.set('s:a', 1, 20);
+  l1.delete('s:a', 'a', false, 19);
+  assert.equal(l1.get('s:a'), 1);
+  l1.clear(false, 19);
+  assert.equal(l1.get('s:a'), 1, 'an older namespace push must not clear a newer generation');
+});
+
+void test('key invalidation fences only active reads of that key', () => {
+  const l1 = new LocalL1Cache({ max: 10 });
+  const old = l1.trackRead('s:a');
+  const unrelated = l1.trackRead('s:b');
+  l1.delete('s:a', 'a', false, 2);
+  l1.set('s:a', 'old', 1, undefined, 'a', old);
+  l1.set('s:b', 'warm', 1, undefined, 'b', unrelated);
+  assert.equal(l1.get('s:a'), undefined);
+  assert.equal(l1.get('s:b'), 'warm');
+  old.release();
+  unrelated.release();
+  // Once all reads finish, their key fences are discarded. A later read
+  // starts from the namespace floor, independent of completed key fences.
+  const next = l1.trackRead('s:a');
+  assert.equal(next.version, 0);
+  next.release();
+  next.release();
+});

@@ -386,3 +386,48 @@ void test('fetch followers poll once per cycle and populate L1 from the claim re
     await worker.stop();
   }
 });
+
+void test(
+  'worker writes invalidate a retained primary L1 without dropping unrelated hot keys',
+  { timeout: 15000 },
+  async () => {
+    const namespace = 'l1-retained-primary-worker-writes';
+    const primary = new LRUCacheClustered<string, number>({ namespace, max: 10, localL1: { experimental: true } });
+    await primary.set('hot', 1);
+    await primary.set('changed', 2);
+    await primary.get('hot');
+    await primary.get('changed');
+    setupHarness();
+    const worker = await forkWorker();
+    try {
+      await worker.send('set', { options: { namespace }, key: 'changed', value: 3 });
+      assert.equal(await primary.get('changed'), 3, 'a worker invalidates the primary reader');
+      assert.equal(await primary.get('hot'), 1);
+      assert.equal(primary.localStats()?.hits, 1, 'the unrelated primary key remains warm');
+    } finally {
+      await worker.stop();
+      await primary.destroy();
+    }
+  },
+);
+
+void test('an unrelated worker write preserves a retained worker L1 hit', { timeout: 15000 }, async () => {
+  const namespace = 'l1-retained-worker-targeted';
+  const primary = new LRUCacheClustered<string, number>({ namespace, max: 10 });
+  await primary.set('hot', 1);
+  setupHarness();
+  const reader = await forkWorker();
+  const writer = await forkWorker();
+  try {
+    await reader.send('openLocal', { namespace, localL1: { experimental: true } });
+    await reader.send('readLocal', { namespace, key: 'hot' });
+    await writer.send('set', { options: { namespace }, key: 'unrelated', value: 2 });
+    const result = await reader.send<{ value: number; stats: L1Stats }>('readLocal', { namespace, key: 'hot' });
+    assert.equal(result.value, 1);
+    assert.equal(result.stats.hits, 1);
+    assert.equal(result.stats.misses, 1, 'the worker keeps its warmed unrelated key');
+  } finally {
+    await Promise.all([reader.stop(), writer.stop()]);
+    await primary.destroy();
+  }
+});

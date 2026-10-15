@@ -1,4 +1,5 @@
 import cluster from 'node:cluster';
+import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { LRUCache } from 'lru-cache';
 import {
@@ -11,6 +12,7 @@ import {
   type ExecPayload,
 } from './primary.js';
 import { getDefaultClient } from './worker.js';
+import { subscribeInvalidations, emitInvalidation } from './invalidation.js';
 import {
   SOURCE,
   type InvalidationPush,
@@ -18,7 +20,7 @@ import {
   type SerializableLruOptions,
   type Stats,
 } from './messages.js';
-import { LocalL1Cache, encodeL1Key, type L1Stats } from './l1.js';
+import { LocalL1Cache, encodeL1Key, type L1Stats, type L1Read } from './l1.js';
 
 if (cluster.isPrimary) installClusterListener();
 
@@ -31,7 +33,8 @@ type LocalResponse<T> = DispatchResult<T> & { ttlStart?: number };
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type
 type NonNullish = {};
 
-type FetchClaimResult<T> = { kind: 'value'; value: T } | { kind: 'leader'; token: string } | { kind: 'follower' };
+type FetchClaimResult<T> =
+  { kind: 'value'; value: T } | { kind: 'leader'; token: string } | { kind: 'follower'; generation: string };
 
 export interface WriteOptions {
   ttl?: number;
@@ -91,33 +94,6 @@ type NormalizedL1 = {
   invalidation: 'broadcast' | 'ttl-only';
   methods: { get: boolean; has: boolean; fetch: boolean };
 };
-
-type L1InvalidationHandler = (msg: InvalidationPush) => void;
-
-const localInvalidationSubscribers = new Map<string, Set<L1InvalidationHandler>>();
-function subscribeLocalInvalidations(namespace: string, handler: L1InvalidationHandler): () => void {
-  let set = localInvalidationSubscribers.get(namespace);
-  if (!set) {
-    set = new Set();
-    localInvalidationSubscribers.set(namespace, set);
-  }
-  set.add(handler);
-  return () => {
-    const current = localInvalidationSubscribers.get(namespace);
-    /* c8 ignore next -- unsubscribe closures are nulled after use; this only protects stale internal closures. */
-    if (!current) return;
-    current.delete(handler);
-    if (current.size === 0) localInvalidationSubscribers.delete(namespace);
-  };
-}
-
-function emitLocalInvalidation(msg: InvalidationPush, exclude?: L1InvalidationHandler): void {
-  const set = localInvalidationSubscribers.get(msg.namespace);
-  if (!set) return;
-  for (const handler of set) {
-    if (handler !== exclude) handler(msg);
-  }
-}
 
 function shouldEmitLocalInvalidation(payload: ExecPayload, value: unknown): boolean {
   switch (payload.op) {
@@ -227,8 +203,8 @@ export class LRUCacheClustered<K extends {} = string, V extends {} = {}> {
   readonly #l1?: LocalL1Cache<V & NonNullish>;
   readonly #l1Methods: { get: boolean; has: boolean; fetch: boolean };
   readonly #l1Invalidation: 'broadcast' | 'ttl-only';
-  #l1InvalidationHandler?: L1InvalidationHandler;
   #unsubscribeL1?: () => void;
+  #publishingOwnMutation = false;
 
   constructor(options: LRUCacheClusterOptions & InternalOptions = {}) {
     this.namespace = options.namespace ?? 'default';
@@ -331,26 +307,34 @@ export class LRUCacheClustered<K extends {} = string, V extends {} = {}> {
       const hit = this.#getLocal(key);
       if (hit !== undefined) return hit;
     }
-    const r = await this.#dispatchWithMeta<V | undefined>({ op: 'get', key, includeTTL: !!useL1 }, this.failsafe);
-    if (useL1 && r.value !== undefined) this.#setLocalFromPrimary(key, r.value, r);
-    return r.value;
+    const read = useL1 ? this.#trackLocalRead(key) : undefined;
+    try {
+      const r = await this.#dispatchWithMeta<V | undefined>({ op: 'get', key, includeTTL: !!useL1 }, this.failsafe);
+      if (useL1 && r.value !== undefined) this.#setLocalFromPrimary(key, r.value, r, 0, read);
+      return r.value;
+    } finally {
+      read?.release();
+    }
   }
   async set(key: K, value: V, opts?: WriteOptions): Promise<boolean> {
     this.#deleteLocal(key);
-    const r = await this.#dispatchWithMeta<boolean>(
-      { op: 'set', key, value, ttl: opts?.ttl, size: opts?.size, includeTTL: !!this.#l1 && opts?.updateL1 },
-      this.failsafe,
-    );
-    if (this.#l1) this.#l1.advanceLatestSeen(r.version);
-    if (this.#l1 && opts?.updateL1 && r.value === true) {
-      this.#setLocalFromPrimary(key, value, r);
+    const read = this.#l1 && opts?.updateL1 ? this.#trackLocalRead(key) : undefined;
+    try {
+      const r = await this.#dispatchWithMeta<boolean>(
+        { op: 'set', key, value, ttl: opts?.ttl, size: opts?.size, includeTTL: !!this.#l1 && opts?.updateL1 },
+        this.failsafe,
+      );
+      if (this.#l1 && opts?.updateL1 && r.value === true) {
+        this.#setLocalFromPrimary(key, value, r, 0, read);
+      }
+      return r.value;
+    } finally {
+      read?.release();
     }
-    return r.value;
   }
   async delete(key: K): Promise<boolean> {
     this.#deleteLocal(key);
     const r = await this.#dispatchWithMeta<boolean>({ op: 'delete', key }, this.failsafe);
-    if (this.#l1) this.#l1.advanceLatestSeen(r.version);
     return r.value;
   }
   async has(key: K, opts?: ReadOptions): Promise<boolean> {
@@ -368,20 +352,23 @@ export class LRUCacheClustered<K extends {} = string, V extends {} = {}> {
       const hit = this.#getLocal(key, 'peek');
       if (hit !== undefined) return hit;
     }
-    const r = await this.#dispatchWithMeta<V | undefined>({ op: 'peek', key, includeTTL: !!useL1 }, this.failsafe);
-    if (useL1 && r.value !== undefined) this.#setLocalFromPrimary(key, r.value, r);
-    return r.value;
+    const read = useL1 ? this.#trackLocalRead(key) : undefined;
+    try {
+      const r = await this.#dispatchWithMeta<V | undefined>({ op: 'peek', key, includeTTL: !!useL1 }, this.failsafe);
+      if (useL1 && r.value !== undefined) this.#setLocalFromPrimary(key, r.value, r, 0, read);
+      return r.value;
+    } finally {
+      read?.release();
+    }
   }
   async clear(): Promise<void> {
     this.#l1?.clear();
     const r = await this.#dispatchWithMeta<void>({ op: 'clear' }, this.failsafe);
-    if (this.#l1) this.#l1.advanceLatestSeen(r.version);
     return r.value;
   }
   async purgeStale(): Promise<boolean> {
     this.#l1?.clear();
     const r = await this.#dispatchWithMeta<boolean>({ op: 'purgeStale' }, this.failsafe);
-    if (this.#l1) this.#l1.advanceLatestSeen(r.version);
     return r.value;
   }
 
@@ -399,29 +386,36 @@ export class LRUCacheClustered<K extends {} = string, V extends {} = {}> {
     // Hits were inserted in input order, so a fully warm batch is ready.
     if (remainingKeys.length === 0) return values;
 
-    const r = await this.#dispatchWithMeta<Array<[K, V | undefined]> | undefined>(
-      { op: 'mGet', keys: remainingKeys, includeTTL: !!useL1 },
-      this.failsafe,
-    );
-    // Default cluster IPC uses JSON serialization, which rewrites
-    // `undefined` inside arrays to `null`. Cache values are non-nullish, so
-    // a null on this wire can only mean "the primary returned undefined for
-    // a missing key". Normalize so the public Map<K, V | undefined> contract
-    // holds in both primary and worker mode. The `?? []` covers the
-    // failsafe='resolve' + IPC timeout case where dispatch resolves to
-    // undefined; matches the previous `new Map(undefined)` empty-Map result.
-    for (const [index, [k, v]] of (r.value ?? []).entries()) {
-      const value = v === null ? undefined : v;
-      values.set(k, value);
-      if (useL1 && value !== undefined) {
-        this.#setLocalFromPrimary(k, value, r, index);
+    const reads = useL1
+      ? new Map([...new Set(remainingKeys)].map((key) => [key, this.#trackLocalRead(key)]))
+      : undefined;
+    try {
+      const r = await this.#dispatchWithMeta<Array<[K, V | undefined]> | undefined>(
+        { op: 'mGet', keys: remainingKeys, includeTTL: !!useL1 },
+        this.failsafe,
+      );
+      // Default cluster IPC uses JSON serialization, which rewrites
+      // `undefined` inside arrays to `null`. Cache values are non-nullish, so
+      // a null on this wire can only mean "the primary returned undefined for
+      // a missing key". Normalize so the public Map<K, V | undefined> contract
+      // holds in both primary and worker mode. The `?? []` covers the
+      // failsafe='resolve' + IPC timeout case where dispatch resolves to
+      // undefined; matches the previous `new Map(undefined)` empty-Map result.
+      for (const [index, [k, v]] of (r.value ?? []).entries()) {
+        const value = v === null ? undefined : v;
+        values.set(k, value);
+        if (useL1 && value !== undefined) {
+          this.#setLocalFromPrimary(k, value, r, index, reads?.get(k));
+        }
       }
+      const out = new Map<K, V | undefined>();
+      for (const k of keys) {
+        if (values.has(k)) out.set(k, values.get(k));
+      }
+      return out;
+    } finally {
+      if (reads) for (const read of reads.values()) read?.release();
     }
-    const out = new Map<K, V | undefined>();
-    for (const k of keys) {
-      if (values.has(k)) out.set(k, values.get(k));
-    }
-    return out;
   }
   async mSet(entries: Iterable<MSetEntry<K, V>>, opts?: WriteOptions): Promise<void> {
     this.#l1?.clear();
@@ -430,13 +424,11 @@ export class LRUCacheClustered<K extends {} = string, V extends {} = {}> {
       { op: 'mSet', entries: arr, ttl: opts?.ttl, size: opts?.size },
       this.failsafe,
     );
-    if (this.#l1) this.#l1.advanceLatestSeen(r.version);
     return r.value;
   }
   async mDelete(keys: K[]): Promise<void> {
     this.#l1?.clear();
     const r = await this.#dispatchWithMeta<void>({ op: 'mDelete', keys }, this.failsafe);
-    if (this.#l1) this.#l1.advanceLatestSeen(r.version);
     return r.value;
   }
 
@@ -462,7 +454,6 @@ export class LRUCacheClustered<K extends {} = string, V extends {} = {}> {
       { op: 'incr', key, amount, ttl: opts?.ttl, size: opts?.size },
       this.failsafe,
     );
-    if (this.#l1) this.#l1.advanceLatestSeen(r.version);
     return r.value;
   }
   async decr(key: K, amount?: number, opts?: WriteOptions): Promise<number> {
@@ -471,7 +462,6 @@ export class LRUCacheClustered<K extends {} = string, V extends {} = {}> {
       { op: 'decr', key, amount, ttl: opts?.ttl, size: opts?.size },
       this.failsafe,
     );
-    if (this.#l1) this.#l1.advanceLatestSeen(r.version);
     return r.value;
   }
 
@@ -510,13 +500,11 @@ export class LRUCacheClustered<K extends {} = string, V extends {} = {}> {
       { op: 'setIfAbsent', key, value, ttl: opts?.ttl, size: opts?.size },
       this.failsafe,
     );
-    if (this.#l1) this.#l1.advanceLatestSeen(r.version);
     return r.value;
   }
   async load(entries: Array<[K, LRUCache.Entry<V>]>): Promise<void> {
     this.#l1?.clear();
     const r = await this.#dispatchWithMeta<void>({ op: 'load', entries }, this.failsafe);
-    if (this.#l1) this.#l1.advanceLatestSeen(r.version);
     return r.value;
   }
   async destroy(): Promise<boolean> {
@@ -624,24 +612,33 @@ export class LRUCacheClustered<K extends {} = string, V extends {} = {}> {
       if (existing) return existing.promise;
     }
 
+    const read = useFetchL1 ? this.#trackLocalRead(key) : undefined;
     let slot!: { promise: Promise<V> };
+    const requestId = randomUUID();
+    let generation: string | undefined;
+    let claimPending = false;
     const run = async (): Promise<V> => {
       let forceRefresh = opts?.forceRefresh === true;
 
       while (true) {
+        claimPending = true;
         const response = await this.#dispatchWithMeta<FetchClaimResult<V>>(
           {
             op: 'fetchClaim',
             key,
             forceRefresh,
+            requestId,
+            generation,
             includeTTL: !!useFetchL1,
           },
           'reject',
         );
+        claimPending = false;
         const claim = response.value;
 
         if (claim.kind === 'value') {
-          if (useFetchL1) this.#setLocalFromPrimary(key, claim.value, response);
+          generation = undefined; // The primary has released this follower.
+          if (useFetchL1) this.#setLocalFromPrimary(key, claim.value, response, 0, read);
           return claim.value;
         }
         if (claim.kind === 'leader') {
@@ -660,15 +657,18 @@ export class LRUCacheClustered<K extends {} = string, V extends {} = {}> {
               'reject',
             );
             if (!stored.value) {
-              return (await this.get(key, { bypassL1: true })) as V;
+              const newer = await this.#dispatchRequired<V | undefined>({ op: 'get', key, existingOnly: true });
+              if (newer === undefined)
+                throw new Error('Fetch was superseded by a cache mutation and no current value remains');
+              return newer;
             }
+            generation = undefined; // Successful store removes the entire group.
             // Populate the leader's L1 with the fresh value and the version
             // returned by fetchStore. bypassL1 skips the populate so the caller
             // sees the fresh L2 result without repopulating their L1.
             if (useFetchL1) {
-              this.#setLocalFromPrimary(key, v, stored);
+              this.#setLocalFromPrimary(key, v, stored, 0, read);
             }
-            if (this.#l1) this.#l1.advanceLatestSeen(stored.version);
             return v;
           } catch (error) {
             try {
@@ -684,6 +684,7 @@ export class LRUCacheClustered<K extends {} = string, V extends {} = {}> {
           }
         }
 
+        generation = claim.generation;
         forceRefresh = false;
         await new Promise((resolve) => setTimeout(resolve, FETCH_POLL_MS));
       }
@@ -697,52 +698,68 @@ export class LRUCacheClustered<K extends {} = string, V extends {} = {}> {
       // Identity check — a newer forceRefresh fetch may have replaced our
       // slot. Only clear if this slot is still current.
       if (this.#inFlight.get(key) === slot) this.#inFlight.delete(key);
+      read?.release();
+      if (generation !== undefined || claimPending) {
+        try {
+          await this.#dispatchRequired<boolean>({ op: 'fetchRelease', key, generation, requestId });
+        } catch {
+          // Cleanup must preserve the original result or fetcher error.
+        }
+      }
     }
   }
 
   #installL1Subscription(): void {
     if (!this.#l1 || this.#l1Invalidation !== 'broadcast' || this.#unsubscribeL1) return;
     const handle = (msg: InvalidationPush) => this.#applyL1Invalidation(msg);
-    this.#l1InvalidationHandler = handle;
-    const unsubscribeLocal = subscribeLocalInvalidations(this.namespace, handle);
+    const unsubscribeLocal = subscribeInvalidations(this.namespace, handle);
     const unsubscribeIpc = cluster.isPrimary
       ? undefined
       : getDefaultClient().subscribeInvalidations(this.namespace, handle);
     this.#unsubscribeL1 = () => {
       unsubscribeLocal();
       unsubscribeIpc?.();
-      this.#l1InvalidationHandler = undefined;
     };
   }
 
   #applyL1Invalidation(msg: InvalidationPush): void {
-    this.#l1!.advanceLatestSeen(msg.version);
     // Emit broadcast-reason event before the L1 mutation so listeners can
     // distinguish broadcast-driven invalidations from local-write ones.
-    this.#emitter.emit('l1:invalidate', {
-      namespace: this.namespace,
-      key: msg.push === 'l1:invalidate' ? msg.key : '*',
-      reason: 'broadcast',
-    });
-    if (msg.push === 'l1:invalidate') {
-      try {
-        this.#l1!.delete(encodeL1Key(msg.key as NonNullish), msg.key, false);
-      } catch {
-        // Symbol or unencodable key: no-op
+    try {
+      if (!this.#publishingOwnMutation) {
+        this.#emitter.emit('l1:invalidate', {
+          namespace: this.namespace,
+          key: msg.push === 'l1:invalidate' ? msg.key : '*',
+          reason: 'broadcast',
+        });
       }
-    } else {
-      this.#l1!.clear(false);
+    } finally {
+      // Event handlers may throw. They must not prevent coherence updates.
+      if (msg.push === 'l1:invalidate') {
+        try {
+          this.#l1!.delete(encodeL1Key(msg.key as NonNullish), msg.key, false, msg.version);
+        } catch {
+          // Symbol or unencodable key: no-op
+        }
+      } else {
+        this.#l1!.clear(false, msg.version);
+      }
     }
   }
 
-  #setLocalFromPrimary(key: K, value: V, response: LocalResponse<unknown>, index = 0): void {
+  #setLocalFromPrimary(key: K, value: V, response: LocalResponse<unknown>, index = 0, read?: L1Read): void {
     const enc = encodeL1KeyOrUndefined(key);
     const remaining = response.ttls?.[index];
     // Older primaries may omit TTL metadata. Serve the result without caching
     // it locally rather than guessing an expiration.
     if (enc === undefined || remaining === undefined) return;
     const ttl = remaining === null ? undefined : remaining - (globalThis.performance.now() - response.ttlStart!);
-    this.#l1!.set(enc, value, response.version, ttl, key);
+    this.#l1!.set(enc, value, response.version, ttl, key, read);
+  }
+
+  #trackLocalRead(key: K): L1Read | undefined {
+    const enc = encodeL1KeyOrUndefined(key);
+    return enc === undefined ? undefined : this.#l1!.trackRead(enc);
   }
 
   #getLocal(key: K, mode: 'get' | 'peek' | 'has' = 'get'): V | undefined {
@@ -758,7 +775,25 @@ export class LRUCacheClustered<K extends {} = string, V extends {} = {}> {
 
   #emitLocalInvalidation(payload: ExecPayload, value: unknown, version: number): void {
     const msg = buildLocalInvalidation(this.namespace, payload, version, value);
-    if (msg) emitLocalInvalidation(msg, this.#l1InvalidationHandler);
+    if (msg) {
+      this.#publishingOwnMutation = true;
+      try {
+        emitInvalidation(msg);
+      } finally {
+        this.#publishingOwnMutation = false;
+      }
+    }
+  }
+
+  #invalidateOwnEvictions(result: DispatchResult<unknown>): void {
+    if (!this.#l1) return;
+    for (const key of result.evictedKeys ?? []) {
+      try {
+        this.#l1.delete(encodeL1Key(key as NonNullish), key, false, result.version);
+      } catch {
+        // An unencodable key cannot have populated this L1.
+      }
+    }
   }
 
   #dispatch<T>(payload: ExecPayload): Promise<T> {
@@ -776,20 +811,24 @@ export class LRUCacheClustered<K extends {} = string, V extends {} = {}> {
     const ttlStart = payload.includeTTL ? globalThis.performance.now() : undefined;
     const request = { ...payload, cacheOptions: this.#lruOptions } as ExecPayload;
     if (cluster.isPrimary) {
+      this.#publishingOwnMutation = true;
       try {
         const r = dispatchAndBroadcast(this.namespace, request);
-        this.#emitLocalInvalidation(request, r.value, r.version);
+        this.#invalidateOwnEvictions(r);
         return { ...r, value: r.value as T, ttlStart };
       } catch (e) {
         // Primary-mode errors always reject; failsafe only applies to IPC
         // timeouts in worker mode.
         throw e instanceof Error ? e : new Error(String(e));
+      } finally {
+        this.#publishingOwnMutation = false;
       }
     }
     const r = await getDefaultClient().sendToPrimaryWithMeta<T>(
       { namespace: this.namespace, timeout: this.timeout, failsafe },
       request,
     );
+    this.#invalidateOwnEvictions(r);
     this.#emitLocalInvalidation(request, r.value, r.version);
     return { ...r, ttlStart };
   }

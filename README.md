@@ -213,6 +213,15 @@ Sharing saves duplicate cache storage, but asking another process for a value ta
 
 Use this package when sharing cached data is worth the IPC cost. Use plain per-process `lru-cache` when worker independence and the lowest local read latency matter more. Benchmark with your payload sizes, worker count, and read/write mix using `pnpm bench`.
 
+The benchmark runs real workers with L1 enabled and disabled, checks every returned value, and reports JSON lines with throughput, mean/p95/p99 latency, IPC request counts, local hits, and fetcher calls. It covers hot reads, 95% reads with unrelated writes, batches of ten reads, and concurrent fetch misses. Initialization and warmup are excluded. The default uses two workers and 128-byte and 16-KiB payloads. Fetch cases use at most 50 keys with a simulated 5 ms upstream delay.
+
+```sh
+BENCH_WORKERS=1,4 BENCH_PAYLOAD_BYTES=128,16384 BENCH_ITERATIONS=2000 pnpm bench
+BENCH_SERIALIZATION=advanced pnpm bench
+```
+
+Compare results on the same machine and Node.js version. Latency samples measure the cache operation; aggregate throughput also includes result validation and benchmark messaging.
+
 ## Options
 
 Choose how much the cache can hold and how long values stay fresh. `max` limits the number of entries; `ttl`, or time to live, sets their lifetime in milliseconds.
@@ -406,6 +415,10 @@ If several workers ask for the same missing value, one does the work while the o
 
 Both `memoize()` and `cache.fetch()` coordinate through the primary so concurrent misses for the same key collapse to one in-flight fetch across instances and workers.
 
+An explicit write supersedes older fetch work for the affected key. This includes `set()`, `delete()`, and batch mutations; `clear()`, `load()`, and `destroy()` supersede claims across the namespace. The fetcher itself keeps running, but its old result cannot overwrite a newer write or restore a removed entry. When it finishes, the fetch returns the newer cached value if one exists, otherwise it rejects with an error indicating that its claim was superseded. A delete cancels a pending claim even when no value has been stored yet. Waiting followers also retain their claim generation, so they cannot take fresh leadership and restore a removed entry after that generation is revoked. Ordinary leader failure or lease expiry still permits takeover.
+
+Follower registrations are released when calls settle. Cancellation or an uncertain claim response may require an additional cleanup request. Successful value and store responses clean up directly, so an uncontended cold fetch still uses two requests, and warm L1 hits use none.
+
 Passing `forceRefresh: true` skips both the cache lookup and any in-flight claim and starts a fresh leader fetch. On a cache miss, concurrent callers without `forceRefresh` wait on the current fetch and reuse its result. During a forced refresh, other instances can still read an existing cached value until the refresh finishes. Passing `bypassL1: true` skips local L1 reads and population for that call while preserving the primary-side single-flight behavior.
 
 A fetch claim has a 30-second lease. A later caller can take over an expired claim, and a worker exit releases its claims. Fetchers must tolerate duplicate execution after a lease expires or a forced refresh replaces a claim.
@@ -432,6 +445,7 @@ Available namespaces:
 
 - `lru-cache-clustered-primary` logs cache creation and registry events.
 - `lru-cache-clustered-messages` logs IPC requests and responses.
+- `lru-cache-clustered-invalidations` logs errors thrown by local invalidation subscribers.
 
 ## Migration
 
@@ -453,14 +467,14 @@ pnpm install --frozen-lockfile
 pnpm check
 ```
 
-| Command              | What it does                                                                              |
-| -------------------- | ----------------------------------------------------------------------------------------- |
-| `pnpm check`         | Lint, typecheck, tests, unused-code checks, type coverage, build, and bundle-size checks. |
-| `pnpm test`          | Unit, fuzz, and real cluster-worker tests.                                                |
-| `pnpm test:coverage` | Text and LCOV coverage reports in `coverage/`.                                            |
-| `pnpm build`         | ESM and CommonJS bundles with TypeScript declarations in `dist/`.                         |
-| `pnpm bench`         | Compare worker reads with and without local L1.                                           |
-| `pnpm example:users` | Start the shared user-cache example.                                                      |
+| Command              | What it does                                                                                           |
+| -------------------- | ------------------------------------------------------------------------------------------------------ |
+| `pnpm check`         | Lint, typecheck, tests, unused-code checks, type coverage, build, and bundle-size checks.              |
+| `pnpm test`          | Unit, fuzz, and real cluster-worker tests.                                                             |
+| `pnpm test:coverage` | Text and LCOV reports in `coverage/`; requires 100% source statements, branches, functions, and lines. |
+| `pnpm build`         | ESM and CommonJS bundles with TypeScript declarations in `dist/`.                                      |
+| `pnpm bench`         | Compare worker reads with and without local L1.                                                        |
+| `pnpm example:users` | Start the shared user-cache example.                                                                   |
 
 `src/primary.ts` owns shared state and executes operations. `src/worker.ts` manages IPC requests and responses. `src/index.ts` exposes the public API and connects it to `src/l1.ts`. Codec and memoization helpers live in `src/codec.ts` and `src/memoize.ts`.
 

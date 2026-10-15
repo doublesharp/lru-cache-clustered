@@ -1,3 +1,15 @@
+# 2.1.2 / 2026-10-15
+
+- Handle asynchronous primary response and invalidation send failures when workers disconnect, without retrying mutations.
+- Keep request IDs unique across ESM, CommonJS, and duplicate package copies in the same worker.
+- Deliver worker-originated invalidations to primary-process L1 caches and invalidate applied batch changes even when a later entry fails.
+- Preserve unrelated warm L1 entries during single-key writes and protect outstanding cache fills with temporary per-key fences.
+- Release destroyed namespace version records while retaining monotonic mutation versions.
+- Prevent older fetch claims from overwriting newer explicit mutations. A superseded fetch returns a newer cached value, or rejects if none remains.
+- Benchmark real workers with configurable counts, payload sizes, mixed writes, batches, and coordinated fetches, including exact result checks and IPC counts.
+- Increase the compressed bundle budget from 7 kB to 8 kB to accommodate the correctness fixes and bounded invalidation tracking.
+- Cover all source statements, branches, functions, and lines, and require 100% coverage in the coverage command.
+
 # 2.1.1 / 2026-09-11
 
 - Override tsup's esbuild dependency to the patched 0.28.2 release, removing the older Windows development-server vulnerability.

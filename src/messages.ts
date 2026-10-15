@@ -22,7 +22,7 @@ export type Request = RequestBase &
     | { op: 'init'; options: SerializableLruOptions }
     | { op: 'healthCheck' }
     | { op: 'destroy' }
-    | { op: 'get'; key: unknown }
+    | { op: 'get'; key: unknown; existingOnly?: boolean }
     | { op: 'set'; key: unknown; value: unknown; ttl?: number; size?: number }
     | { op: 'setIfAbsent'; key: unknown; value: unknown; ttl?: number; size?: number }
     | { op: 'delete'; key: unknown }
@@ -48,7 +48,8 @@ export type Request = RequestBase &
     | { op: 'stats' }
     | { op: 'incr'; key: unknown; amount?: number; ttl?: number; size?: number }
     | { op: 'decr'; key: unknown; amount?: number; ttl?: number; size?: number }
-    | { op: 'fetchClaim'; key: unknown; forceRefresh?: boolean }
+    | { op: 'fetchClaim'; key: unknown; forceRefresh?: boolean; generation?: string; requestId?: string }
+    | { op: 'fetchRelease'; key: unknown; generation?: string; requestId: string }
     | { op: 'fetchStore'; key: unknown; token: string; value: unknown; ttl?: number; size?: number }
     | { op: 'fetchAbort'; key: unknown; token: string }
     | { op: 'allowStale'; value?: boolean }
@@ -69,10 +70,11 @@ type SerializedError = {
 };
 
 // TTLs align with the requested keys. null represents Infinity on JSON IPC.
-export type DispatchResult<T> = { value: T; version: number; ttls?: Array<number | null> };
+export type DispatchResult<T> = { value: T; version: number; ttls?: Array<number | null>; evictedKeys?: unknown[] };
 
 export type Response = { id: string; source: Source } & (
-  { ok: true; value: unknown; version?: number; ttls?: Array<number | null> } | { ok: false; error: SerializedError }
+  | { ok: true; value: unknown; version?: number; ttls?: Array<number | null>; evictedKeys?: unknown[] }
+  | { ok: false; error: SerializedError }
 );
 
 // Subset of LRUCache.Options that survives IPC structured-clone — no functions.

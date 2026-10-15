@@ -13,12 +13,13 @@ import {
 
 const messagesDebug = Debug(`${DEBUG_PREFIX}-messages`);
 
-// Monotonic per-process request ID, shared across all IpcClient instances
-// in this worker. Uniqueness within the process is the only requirement —
-// the primary keys responses by id and only this worker reads them back.
-// Avoids randomUUID's ~1µs cost and keeps wire-format IDs short (1-10
-// chars vs UUID's 36).
-let nextRequestId = 0;
+// ESM, CommonJS, scoped and legacy copies all receive the same process IPC
+// messages. Share the counter across copies so their response listeners cannot
+// consume one another's responses, while keeping monotonically increasing IDs.
+const STATE_KEY = Symbol.for('lru-cache-clustered.worker');
+const workerState = ((globalThis as Record<PropertyKey, unknown>)[STATE_KEY] ??= { nextRequestId: 0 }) as {
+  nextRequestId: number;
+};
 
 type SendOptions = {
   namespace: string;
@@ -70,7 +71,7 @@ export function createIpcClient(proc: ProcessLike): IpcClient {
   });
 
   function send<T>(opts: SendOptions, payload: RequestPayload): Promise<DispatchResult<T>> {
-    const id = String(++nextRequestId);
+    const id = String(++workerState.nextRequestId);
     const request = { id, namespace: opts.namespace, source: SOURCE, ...payload } as Request;
 
     return new Promise((resolve, reject) => {
@@ -87,6 +88,7 @@ export function createIpcClient(proc: ProcessLike): IpcClient {
             value: response.value as T,
             version: response.version ?? 0,
             ttls: response.ttls,
+            evictedKeys: response.evictedKeys,
           });
         else reject(deserializeError(response.error));
       });

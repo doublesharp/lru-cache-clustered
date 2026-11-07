@@ -8,8 +8,6 @@ on:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 concurrency:
   group: pages
@@ -19,6 +17,9 @@ jobs:
   doublcov:
     name: coverage (node 22)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # Codecov upload authenticates with GitHub OIDC
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -50,7 +51,7 @@ jobs:
       - name: Upload Codecov report
         uses: codecov/codecov-action@v5
         with:
-          token: ${{ secrets.CODECOV_TOKEN }}
+          use_oidc: true
           files: ./coverage/lcov.info
           fail_ci_if_error: true
 
@@ -129,6 +130,10 @@ jobs:
     needs: doublcov
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write # actions/deploy-pages authenticates with GitHub OIDC
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}coverage/

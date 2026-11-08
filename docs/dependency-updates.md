@@ -1,3 +1,29 @@
+# Dependency update, November 8, 2026
+
+Updated seven direct development dependencies within their existing major versions. The Node.js 22 runtime minimum, runtime dependencies, seven-day release waiting policy, and `tsup>esbuild` override remain unchanged.
+
+| Package                            | Previous | Updated |
+| ---------------------------------- | -------- | ------- |
+| `@types/node`                      | 25.9.8   | 25.9.9  |
+| `@typescript-eslint/eslint-plugin` | 8.70.1   | 8.72.1  |
+| `@typescript-eslint/parser`        | 8.70.1   | 8.72.1  |
+| `eslint`                           | 10.11.0  | 10.14.0 |
+| `knip`                             | 6.38.0   | 6.44.1  |
+| `prettier`                         | 3.9.9    | 3.9.10  |
+| `type-coverage`                    | 2.30.1   | 2.31.1  |
+
+The dependency refresh addresses three advisories in development tooling:
+
+- Knip now resolves Zod 4.6.7, fixing [memory exhaustion during collection validation](https://github.com/advisories/GHSA-mrhx-c7xc-m3w5).
+- A targeted override replaces affected glob versions with 14.0.3, fixing [filesystem traversal continuing after cancellation](https://github.com/isaacs/node-glob/security/advisories/GHSA-3g3m-2fjr-6pw4).
+- A targeted override replaces affected minimatch versions with 11.0.3, fixing [resource exhaustion during pattern preprocessing](https://github.com/isaacs/minimatch/security/advisories/GHSA-g3hv-75wg-m249). Unaffected minimatch 3.x consumers keep their existing major.
+
+The overrides are needed because upstream tools still require older glob and minimatch majors. Both patched packages retain CommonJS and ESM exports and support Node.js 22. A local patch backports the import plugin's [minimatch 11 compatibility fix](https://github.com/un-ts/eslint-plugin-import-x/commit/72540485d12bea99039f30a636ace9ab8ce84ead), replacing the removed `makeRe()` helper with `Minimatch#match`. The upstream 4.18.0 release is still inside the seven-day waiting window.
+
+Every newly resolved package version, including optional platform packages, was checked against npm publication timestamps and predates the seven-day cutoff on November 1, 2026. Newer releases inside the waiting window and unrelated direct major-version upgrades were left out.
+
+---
+
 # Dependency update, September 30, 2026
 
 Updated compatible releases within the existing major versions. The Node.js 22 runtime minimum, seven-day release waiting policy, and `tsup>esbuild` override remain in place.

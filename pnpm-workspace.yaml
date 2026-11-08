@@ -4,3 +4,10 @@ minimumReleaseAge: 10080
 # tsup still requests esbuild 0.27, which has a Windows dev-server advisory.
 overrides:
   'tsup>esbuild': 0.28.2
+  # Upstream tooling still requests majors affected by cancellation / pattern DoS.
+  'glob@>=9.0.0 <14.0.2': 14.0.3
+  'minimatch@>=7.0.0 <11.0.1': 11.0.3
+
+# Backport upstream minimatch 11 support while import-x 4.18.0 ages seven days.
+patchedDependencies:
+  eslint-plugin-import-x@4.17.1: patches/eslint-plugin-import-x@4.17.1.patch

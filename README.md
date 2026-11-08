@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/doublesharp/lru-cache-clustered/main/assets/LRUCacheClustered.png" alt="A pika, the project mascot" width="180" height="180">
+  <img src="https://raw.githubusercontent.com/doublesharp/lru-cache-clustered/main/assets/LRUCacheClustered.png" alt="A pika, the project mascot" width="128" height="128">
 </p>
 
 # @0xdoublesharp/lru-cache-clustered
@@ -9,19 +9,13 @@
 [![Coverage](https://codecov.io/gh/doublesharp/lru-cache-clustered/branch/main/graph/badge.svg)](https://codecov.io/gh/doublesharp/lru-cache-clustered)
 [![Downloads](https://img.shields.io/npm/dt/%400xdoublesharp%2Flru-cache-clustered.svg)](https://www.npmjs.com/package/@0xdoublesharp/lru-cache-clustered)
 
-Let your Node.js workers share what they have already learned. When one worker caches a database result, the others can reuse it instead of loading and storing their own copies.
+Shared in-memory [LRU caches](https://github.com/isaacs/node-lru-cache) for Node.js cluster workers, with atomic counters, coordinated fetches, and optional worker-local caching.
 
-This package keeps namespaced [LRU caches](https://github.com/isaacs/node-lru-cache) in a Node.js cluster's primary process. LRU means least recently used: when the cache fills up, it removes the entries you have used least recently. Workers access the shared cache through an asynchronous API over inter-process communication, or IPC. Atomic counters and fetch coordination also run in the primary.
+The primary process holds one cache per namespace. Workers share its entries through an asynchronous API over inter-process communication (IPC), so a value loaded by one worker is available to the others. No separate cache service is required; data stays in memory for the lifetime of the primary.
 
-No separate cache service is required. The shared data lives in memory for the lifetime of the primary process. Optional local L1 caches keep hot values inside individual workers to avoid repeated IPC reads.
-
-<p align="center">
-  <img src="https://raw.githubusercontent.com/doublesharp/lru-cache-clustered/main/assets/topology.svg" alt="The primary owns shared namespaced caches. Workers read and write through IPC, with optional local caches and invalidation messages." width="100%">
-</p>
+[Quick start](#quick-start) · [How it works](#how-it-works) · [Examples](#use-cases) · [Local L1](#local-l1-mode) · [API](#api)
 
 ## What you get
-
-Each worker can reuse the same cached data, take a turn loading a missing value, and update shared counters without racing another worker.
 
 | Capability             | How it works                                                                                     |
 | ---------------------- | ------------------------------------------------------------------------------------------------ |
@@ -36,15 +30,13 @@ Each worker can reuse the same cached data, take a turn loading a missing value,
 
 ## Install
 
-Install this package and the cache engine it uses. Both JavaScript and TypeScript applications can use it.
-
 ```sh
 npm install @0xdoublesharp/lru-cache-clustered lru-cache@^11
 ```
 
 For pnpm or Yarn, use `pnpm add` or `yarn add` with the same package names. `lru-cache` is a peer dependency, so your application controls its installed version within the supported range.
 
-Requires Node.js 22 or newer. Includes ESM and CommonJS builds and TypeScript declarations.
+Requires **Node.js 22 or newer**. Includes ESM and CommonJS builds and TypeScript declarations.
 
 > `@0xdoublesharp/lru-cache-clustered` is the canonical package name. `lru-cache-for-clusters-as-promised` is published from the same build at the same version.
 
@@ -83,18 +75,36 @@ Both workers read the same entry. `getInstance()` waits for namespace registrati
 
 Import the package in the primary before `cluster.fork()`. The import installs the IPC listener; `bootstrap()` makes that setup explicit. Instances that share a namespace must agree on primary cache options such as `max` and `ttl`.
 
+## How it works
+
+The primary owns the shared caches. Each namespace identifies one cache, and instances using that namespace must agree on options such as `max`, `ttl`, and `allowStale`. Conflicting options throw during initialization.
+
+<p align="center">
+  <a href="https://raw.githubusercontent.com/doublesharp/lru-cache-clustered/main/assets/topology.svg">
+    <img src="https://raw.githubusercontent.com/doublesharp/lru-cache-clustered/main/assets/topology.png" alt="One primary process holds shared namespaced caches. Workers send IPC requests and receive responses. Each worker can optionally keep an L1 cache for local hits; writes reach the primary and trigger asynchronous invalidation." width="800">
+  </a>
+</p>
+
+- **In the primary**, operations call the namespace's `LRUCache` directly.
+- **In a worker**, operations send typed IPC requests and return promises. With L1 enabled, eligible local hits skip IPC. Writes still reach the primary, which broadcasts invalidations by default.
+
+> **Initialization.** In a worker, `new LRUCacheClustered(...)` sends an `init` message immediately. `cache.ready` waits for ordering but swallows initialization errors. Use `await LRUCacheClustered.getInstance(...)` or `await cache.healthCheck()` to fail startup when registration fails.
+
 ## Use cases
 
-Use it when several workers in one Node.js cluster need the same temporary data. The most useful patterns save repeated work or coordinate short-lived state.
+The [example guide](./examples/README.md) includes request commands, ports, and environment settings. Run these commands from a checkout with dependencies installed.
 
-| Idea                                                              | Pattern                                                                                                          | Example                                                                     |
-| ----------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
-| Stop a popular profile from triggering duplicate database queries | `memoize()` or `fetch()` lets workers reuse a cached result and coordinate concurrent misses.                    | [User lookup server](./examples/clustered-users-server.ts)                  |
-| Limit API requests across workers                                 | `incr()` updates one shared counter. Its first write starts the TTL window; later increments keep that deadline. | [Rate limiter](./examples/clustered-rate-limit-server.ts)                   |
-| Share temporary session data                                      | `set()`, `get()`, and `delete()` share entries across workers. Keep durable session state elsewhere.             | [Session server](./examples/clustered-session-server.ts)                    |
-| Suppress repeated job submissions                                 | `setIfAbsent()` lets one worker claim a cached key. Expiration, eviction, or restart can allow another claim.    | [Idempotent intake](./examples/clustered-idempotency-server.ts)             |
-| Keep large generated documents in less cache space                | `wrap()` compresses stored values and decodes them on reads.                                                     | [Compressed documents](./examples/clustered-compressed-documents-server.ts) |
-| Reduce repeated Redis reads                                       | Use this shared cache in front of Redis, then add a small worker L1 for hot reads.                               | [Multilayer cache](./examples/clustered-multilayer-redis-server.ts)         |
+| Example                                                                     | Pattern                                                                       | Run                        |
+| --------------------------------------------------------------------------- | ----------------------------------------------------------------------------- | -------------------------- |
+| [User lookups](./examples/clustered-users-server.ts)                        | Share database results with `memoize()` and `fetch()`.                        | `pnpm example:users`       |
+| [Rate limiting](./examples/clustered-rate-limit-server.ts)                  | Use atomic counters with a fixed TTL window.                                  | `pnpm example:rate-limit`  |
+| [Sessions](./examples/clustered-session-server.ts)                          | Share temporary session reads and writes.                                     | `pnpm example:sessions`    |
+| [Job intake](./examples/clustered-idempotency-server.ts)                    | Suppress duplicate submissions with `setIfAbsent()`.                          | `pnpm example:idempotency` |
+| [Compressed documents](./examples/clustered-compressed-documents-server.ts) | Encode stored values with `wrap()`.                                           | `pnpm example:documents`   |
+| [Local L1 controls](./examples/clustered-l1-controls-server.ts)             | Try method filters, bypass reads, invalidation, and write-through population. | `pnpm example:l1`          |
+| [Redis layers](./examples/clustered-multilayer-redis-server.ts)             | Put shared memory and worker L1 in front of Redis. Requires Redis.            | `pnpm example:multilayer`  |
+
+The [basic L1 server](./examples/clustered-l1-server.ts) also runs with `node --import tsx examples/clustered-l1-server.ts`.
 
 For example, a report endpoint can use the report parameters as a cache key and `fetch()` to coordinate generation. Include tenant and authorization context when they affect the result.
 
@@ -102,27 +112,9 @@ The cache belongs to one primary process. Separate clusters, containers, and mac
 
 Namespaces separate application data by name. They do not restrict worker access, so all workers must be trusted.
 
-## Runnable examples
-
-Start an example server, send it requests, and watch workers share cached results. The [example guide](./examples/README.md) has curl commands, ports, and environment settings.
-
-| Command                    | What to explore                                                                      |
-| -------------------------- | ------------------------------------------------------------------------------------ |
-| `pnpm example:users`       | Shared read-through user cache with `memoize()` and `fetch()`.                       |
-| `pnpm example:rate-limit`  | Fixed-window counters across workers.                                                |
-| `pnpm example:sessions`    | Shared session reads and writes.                                                     |
-| `pnpm example:idempotency` | Temporary job claims with `setIfAbsent()`.                                           |
-| `pnpm example:documents`   | Compression with `wrap()`.                                                           |
-| `pnpm example:l1`          | Method filtering, bypass reads, local invalidation, and write-through L1 population. |
-| `pnpm example:multilayer`  | Shared memory caching in front of Redis. Requires Redis.                             |
-
-The [basic L1 server](./examples/clustered-l1-server.ts) can also run with `node --import tsx examples/clustered-l1-server.ts`.
-
 ## Local L1 mode
 
-Keep a small copy of frequently read values inside each worker. Repeated reads can stay in that worker instead of asking the primary again.
-
-Enable the optional L1 cache with `localL1`. The primary remains the source of truth and owns every write. Invalidation messages tell workers to drop local entries after changes, but delivery is asynchronous.
+Enable `localL1` to keep frequently read values inside each worker and avoid repeated IPC reads. The primary owns every write. Invalidation messages tell workers to drop local entries after changes, but delivery is asynchronous.
 
 ```ts
 type Product = { sku: string; name: string };
@@ -186,19 +178,6 @@ When `methods` is provided, omitted method keys are disabled. `memoize()` delega
 By default, same-process and cross-worker writes broadcast invalidations so hot local entries are dropped before their TTL expires. If you intentionally want TTL-only consistency, set `localL1.invalidation: 'ttl-only'`.
 
 See [`docs/l1.md`](docs/l1.md) for the full consistency model, stats, events, method options, and failure modes.
-
-## How it works
-
-Think of the primary as a shared cupboard and the workers as people borrowing from it. A namespace names one cupboard. Workers with the same namespace share its contents.
-
-`new LRUCacheClustered(...)` branches at construction:
-
-- **In the primary** (`cluster.isPrimary === true`), the instance owns and operates on the in-process `LRUCache` for its namespace directly, without IPC.
-- **In a worker**, every operation becomes a typed IPC request to the primary; the returned Promise resolves with the response.
-
-Instances in different workers that share a `namespace` operate on the same primary-side cache. Those instances should agree on cache options (`max`, `ttl`, `allowStale`, ...): reusing a namespace with conflicting options throws rather than silently keeping whichever process initialized it first.
-
-> **Initialization semantics.** In a worker, `new LRUCacheClustered(...)` eagerly sends the `init` message, but `cache.ready` is ordering-only and intentionally swallows init failure. Use `await cache.healthCheck()` or `await LRUCacheClustered.getInstance(...)` when startup should fail fast if the primary cannot register the namespace.
 
 ## Performance profile
 
@@ -266,8 +245,6 @@ The same methods work in the primary and in workers. Await shared-cache operatio
 
 ### Static
 
-These helpers set up the shared cache before you start using it.
-
 | Method                                   | Description                                                                                                                                                                      |
 | ---------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `LRUCacheClustered.bootstrap()`          | Installs the primary-side cluster listener immediately. Useful when you want an explicit bootstrap call instead of relying on module import side effects.                        |
@@ -275,8 +252,6 @@ These helpers set up the shared cache before you start using it.
 | `LRUCacheClustered.getAllCaches()`       | Returns the `Map<namespace, LRUCache>` registry. Primary only; throws in workers.                                                                                                |
 
 ### Core
-
-Store a value, read it back, check whether it exists, or remove it.
 
 | Method                                        | Returns                   | Notes                                                          |
 | --------------------------------------------- | ------------------------- | -------------------------------------------------------------- |
@@ -325,8 +300,6 @@ Count events without workers overwriting each other, or load a missing value onc
 
 ### Local L1
 
-These controls affect the extra cache inside this process. They help you see whether local reads are saving trips to the primary.
-
 | Method / event                                    | Returns / payload         | Notes                                                                                    |
 | ------------------------------------------------- | ------------------------- | ---------------------------------------------------------------------------------------- |
 | `localStats()`                                    | `L1Stats \| undefined`    | `undefined` when local L1 is disabled.                                                   |
@@ -339,8 +312,6 @@ These controls affect the extra cache inside this process. They help you see whe
 | `off(event, listener)` / `once(event, listener)`  | `this`                    | Standard event helpers.                                                                  |
 
 ### Lifecycle, metrics, tunables
-
-Check the cache, inspect its activity, change its limits, or remove its namespace.
 
 | Method                 | Returns                 | Notes                                                                                                                                           |
 | ---------------------- | ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -385,8 +356,6 @@ await cache.get('user:42'); // decoded back to { id: 42, name: 'ada' }
 > **Binary values.** Default cluster IPC uses JSON serialization and turns a `Buffer` into `{ type: 'Buffer', data: number[] }`. Encode to base64 or rehydrate it in `decode`. If you control cluster setup, `cluster.setupPrimary({ serialization: 'advanced' })` preserves buffers and other supported built-in types. Configure it before forking workers.
 
 ## `memoize` helper
-
-Give a function a memory. Calling it again with the same cache key can reuse the previous result instead of repeating a database query or API request.
 
 `memoize(cache, fn, keyFn, opts)` calls `cache.fetch()` under the hood. `keyFn` must include every input that can change the result, including tenant or permission context when relevant.
 
@@ -435,8 +404,6 @@ A missing key is normal. A failed operation is different: handle its rejected pr
 
 ## Debugging
 
-Turn on logs to see whether workers are reaching the primary and which requests they send.
-
 ```sh
 DEBUG=lru-cache-clustered-* node app.js
 ```
@@ -449,13 +416,9 @@ Available namespaces:
 
 ## Migration
 
-Existing applications can move to the scoped package name while keeping the compatibility alias during the transition.
-
 `LRUCacheClustered` is the canonical class; `LRUCacheForClustersAsPromised` remains an alias. The [migration guide](./docs/migration.md) maps the older methods, options, and package name. The [changelog](./CHANGELOG.md) records release-specific changes.
 
 ## Development
-
-Clone the project, install its dependencies, and run the checks before changing code. The examples are small servers you can use to explore the behavior yourself.
 
 For development, use a current Node.js 22 LTS patch release, at least 22.13, or Node.js 24 LTS. Use the pnpm version recorded in `package.json`; the runtime minimum for applications remains Node.js 22.
 
@@ -484,4 +447,4 @@ Dependency resolution waits seven days after publication through `minimumRelease
 
 ## License
 
-You can use, modify, and distribute this package under the MIT license. See [LICENSE](./LICENSE) for the terms.
+[MIT](./LICENSE).

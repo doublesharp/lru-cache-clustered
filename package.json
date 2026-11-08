@@ -1,6 +1,6 @@
 {
   "name": "@0xdoublesharp/lru-cache-clustered",
-  "version": "2.1.2",
+  "version": "2.1.3",
   "description": "Shared in-memory LRU caches for Node.js cluster workers, with atomic counters, coordinated fetches, and optional local caching.",
   "type": "module",
   "sideEffects": false,
@@ -76,12 +76,12 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/doublesharp/lru-cache-clustered.git"
+    "url": "git+https://github.com/0xdoublesharp/lru-cache-clustered.git"
   },
   "bugs": {
-    "url": "https://github.com/doublesharp/lru-cache-clustered/issues"
+    "url": "https://github.com/0xdoublesharp/lru-cache-clustered/issues"
   },
-  "homepage": "https://github.com/doublesharp/lru-cache-clustered#readme",
+  "homepage": "https://github.com/0xdoublesharp/lru-cache-clustered#readme",
   "keywords": [
     "lru",
     "mru",

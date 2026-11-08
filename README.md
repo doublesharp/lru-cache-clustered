@@ -1,12 +1,12 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/doublesharp/lru-cache-clustered/main/assets/LRUCacheClustered.png" alt="A pika, the project mascot" width="128" height="128">
+  <img src="https://raw.githubusercontent.com/0xdoublesharp/lru-cache-clustered/main/assets/LRUCacheClustered.png" alt="A pika, the project mascot" width="128" height="128">
 </p>
 
 # @0xdoublesharp/lru-cache-clustered
 
 [![npm](https://img.shields.io/npm/v/%400xdoublesharp%2Flru-cache-clustered.svg)](https://www.npmjs.com/package/@0xdoublesharp/lru-cache-clustered)
-[![CI](https://github.com/doublesharp/lru-cache-clustered/actions/workflows/ci.yml/badge.svg)](https://github.com/doublesharp/lru-cache-clustered/actions/workflows/ci.yml)
-[![Coverage](https://codecov.io/gh/doublesharp/lru-cache-clustered/branch/main/graph/badge.svg)](https://codecov.io/gh/doublesharp/lru-cache-clustered)
+[![CI](https://github.com/0xdoublesharp/lru-cache-clustered/actions/workflows/ci.yml/badge.svg)](https://github.com/0xdoublesharp/lru-cache-clustered/actions/workflows/ci.yml)
+[![Coverage](https://codecov.io/gh/0xdoublesharp/lru-cache-clustered/branch/main/graph/badge.svg)](https://codecov.io/gh/0xdoublesharp/lru-cache-clustered)
 [![Downloads](https://img.shields.io/npm/dt/%400xdoublesharp%2Flru-cache-clustered.svg)](https://www.npmjs.com/package/@0xdoublesharp/lru-cache-clustered)
 
 Shared in-memory [LRU caches](https://github.com/isaacs/node-lru-cache) for Node.js cluster workers, with atomic counters, coordinated fetches, and optional worker-local caching.
@@ -39,6 +39,8 @@ For pnpm or Yarn, use `pnpm add` or `yarn add` with the same package names. `lru
 Requires **Node.js 22 or newer**. Includes ESM and CommonJS builds and TypeScript declarations.
 
 > `@0xdoublesharp/lru-cache-clustered` is the canonical package name. `lru-cache-for-clusters-as-promised` is published from the same build at the same version.
+
+**2.1.3** is a maintenance release with clearer documentation and security updates to development tooling. See the [release notes](./CHANGELOG.md#213--2026-11-08) for details.
 
 ## Quick start
 
@@ -80,8 +82,8 @@ Import the package in the primary before `cluster.fork()`. The import installs t
 The primary owns the shared caches. Each namespace identifies one cache, and instances using that namespace must agree on options such as `max`, `ttl`, and `allowStale`. Conflicting options throw during initialization.
 
 <p align="center">
-  <a href="https://raw.githubusercontent.com/doublesharp/lru-cache-clustered/main/assets/topology.svg">
-    <img src="https://raw.githubusercontent.com/doublesharp/lru-cache-clustered/main/assets/topology.png" alt="One primary process holds shared namespaced caches. Workers send IPC requests and receive responses. Each worker can optionally keep an L1 cache for local hits; writes reach the primary and trigger asynchronous invalidation." width="800">
+  <a href="https://raw.githubusercontent.com/0xdoublesharp/lru-cache-clustered/main/assets/topology.svg">
+    <img src="https://raw.githubusercontent.com/0xdoublesharp/lru-cache-clustered/main/assets/topology.png" alt="One primary process holds shared namespaced caches. Workers send IPC requests and receive responses. Each worker can optionally keep an L1 cache for local hits; writes reach the primary and trigger asynchronous invalidation." width="800">
   </a>
 </p>
 
@@ -423,7 +425,7 @@ Available namespaces:
 For development, use a current Node.js 22 LTS patch release, at least 22.13, or Node.js 24 LTS. Use the pnpm version recorded in `package.json`; the runtime minimum for applications remains Node.js 22.
 
 ```sh
-git clone https://github.com/doublesharp/lru-cache-clustered.git
+git clone https://github.com/0xdoublesharp/lru-cache-clustered.git
 cd lru-cache-clustered
 corepack enable
 pnpm install --frozen-lockfile
@@ -443,7 +445,9 @@ pnpm check
 
 When changing cache behavior, add a regression test that retains the same cache instances and checks the resulting values. For L1 changes, verify warm hits, invalidation, and expiration. Cluster tests use child processes under both JSON and advanced serialization.
 
-Dependency resolution waits seven days after publication through `minimumReleaseAge` in `pnpm-workspace.yaml`. Use frozen lockfile installs for reproducible checks. Release preparation with `pnpm prepare:publish` creates scoped and legacy package directories under `dist-publish/`; the [publishing workflow](./.github/workflows/npm-publish.yml) handles publication.
+Dependency resolution waits seven days after publication through `minimumReleaseAge` in `pnpm-workspace.yaml`. Use frozen lockfile installs for reproducible checks. The [dependency update notes](./docs/dependency-updates.md) describe security overrides and the import-plugin compatibility patch.
+
+Release preparation with `pnpm prepare:publish` creates scoped and legacy package directories under `dist-publish/`. Pushing a `vX.Y.Z` tag matching the version in `package.json` triggers the [publishing workflow](./.github/workflows/npm-publish.yml), which runs the package checks and publishes both names to npm with provenance through GitHub OIDC.
 
 ## License
 

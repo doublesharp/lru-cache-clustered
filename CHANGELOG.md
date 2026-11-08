@@ -1,3 +1,15 @@
+# 2.1.3 / 2026-11-08
+
+- Simplify the README, consolidate runnable examples, and redraw the cache topology with larger labels and a high-resolution PNG embed linked to the SVG.
+- Update README links and npm repository metadata to the canonical `0xdoublesharp/lru-cache-clustered` repository.
+- Update seven development dependencies within their existing major versions while preserving the seven-day release waiting policy.
+- Resolve Zod 4.6.7 and override affected glob and minimatch versions with 14.0.3 and 11.0.3 to address development-tool resource-exhaustion and cancellation advisories.
+- Backport the import plugin's minimatch 11 compatibility fix while its upstream release completes the waiting period.
+- Add a deterministic regression test proving that an asynchronous IPC response failure does not resend the response or apply a counter mutation twice.
+- Authenticate Codecov uploads with GitHub OIDC and scope coverage and Pages permissions to their respective jobs.
+
+The runtime API, runtime dependencies, and Node.js 22 minimum are unchanged.
+
 # 2.1.2 / 2026-10-15
 
 - Handle asynchronous primary response and invalidation send failures when workers disconnect, without retrying mutations.

@@ -1,5 +1,7 @@
 # Dependency update, November 8, 2026
 
+Included in [v2.1.3](../CHANGELOG.md#213--2026-11-08).
+
 Updated seven direct development dependencies within their existing major versions. The Node.js 22 runtime minimum, runtime dependencies, seven-day release waiting policy, and `tsup>esbuild` override remain unchanged.
 
 | Package                            | Previous | Updated |
@@ -19,6 +21,8 @@ The dependency refresh addresses three advisories in development tooling:
 - A targeted override replaces affected minimatch versions with 11.0.3, fixing [resource exhaustion during pattern preprocessing](https://github.com/isaacs/minimatch/security/advisories/GHSA-g3hv-75wg-m249). Unaffected minimatch 3.x consumers keep their existing major.
 
 The overrides are needed because upstream tools still require older glob and minimatch majors. Both patched packages retain CommonJS and ESM exports and support Node.js 22. A local patch backports the import plugin's [minimatch 11 compatibility fix](https://github.com/un-ts/eslint-plugin-import-x/commit/72540485d12bea99039f30a636ace9ab8ce84ead), replacing the removed `makeRe()` helper with `Minimatch#match`. The upstream 4.18.0 release is still inside the seven-day waiting window.
+
+Once an upstream import-plugin release meets the waiting policy, update it and remove the `patchedDependencies` entry and its patch file together. Keep the minimatch security override until all consumers request a patched version, and verify the import rule's allow/forbid matching when updating it.
 
 Every newly resolved package version, including optional platform packages, was checked against npm publication timestamps and predates the seven-day cutoff on November 1, 2026. Newer releases inside the waiting window and unrelated direct major-version upgrades were left out.
 

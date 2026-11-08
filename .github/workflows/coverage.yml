@@ -56,7 +56,7 @@ jobs:
           fail_ci_if_error: true
 
       - name: Generate Doublcov report
-        uses: doublesharp/doublcov@v0
+        uses: 0xdoublesharp/doublcov@v0
         with:
           version: latest
           command: build

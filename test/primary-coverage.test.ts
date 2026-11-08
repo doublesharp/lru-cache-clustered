@@ -6,9 +6,54 @@ import { setImmediate } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { LRUCacheClustered } from '../src/index.ts';
-import { dispatchAndBroadcast, dispatchOp, getNamespaceVersion } from '../src/primary.ts';
+import { dispatchAndBroadcast, dispatchOp, getNamespaceVersion, installClusterListener } from '../src/primary.ts';
 
 const runFile = promisify(execFile);
+
+void test('an asynchronous response failure does not retry an applied counter mutation', async () => {
+  const namespace = 'primary-coverage-response-error';
+  const handlers: Array<(message: unknown) => void> = [];
+  const sent: unknown[] = [];
+  const worker = {
+    id: 9011,
+    on: (event: string, handler: (message: unknown) => void) => {
+      if (event === 'message') handlers.push(handler);
+    },
+    isConnected: () => true,
+    send: (message: unknown, callback: (error: Error | null) => void) => {
+      sent.push(message);
+      globalThis.queueMicrotask(() => callback(Object.assign(new Error('write EPIPE'), { code: 'EPIPE' })));
+      return false;
+    },
+  } as unknown as Worker;
+  installClusterListener();
+  cluster.emit('fork', worker);
+  try {
+    assert.equal(handlers.length, 1);
+    handlers[0]!({
+      source: 'lcfcap',
+      id: 'counter-write',
+      namespace,
+      cacheOptions: { max: 10 },
+      op: 'incr',
+      key: 'counter',
+      amount: 1,
+    });
+    await setImmediate();
+    assert.equal(sent.length, 1, 'a failed response must not be resent');
+    assert.deepEqual(sent[0], {
+      source: 'lcfcap',
+      id: 'counter-write',
+      ok: true,
+      value: 1,
+      version: getNamespaceVersion(namespace),
+    });
+    assert.equal(dispatchOp(namespace, { op: 'get', key: 'counter' }), 1);
+    assert.equal((dispatchOp(namespace, { op: 'stats' }) as { sets: number }).sets, 1);
+  } finally {
+    dispatchAndBroadcast(namespace, { op: 'destroy' });
+  }
+});
 
 void test('an asynchronous broadcast failure preserves the write without retrying', async () => {
   const namespace = 'primary-coverage-broadcast-error';
